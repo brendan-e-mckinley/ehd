@@ -1,0 +1,477 @@
+import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.linalg import spsolve, gmres
+from scipy.interpolate import griddata, interp1d
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from numba import njit, prange
+import warnings
+warnings.filterwarnings('ignore')
+
+# Numba-optimized functions
+@njit
+def delta_a(r, a):
+    """Gaussian delta function approximation"""
+    return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
+
+@njit
+def delta_func(r, dx):
+    """Delta function with grid spacing"""
+    return delta_a(r, 1.2*dx)
+
+@njit
+def delta_r_func(r, dx):
+    """Radial derivative of delta function"""
+    a = 1.2*dx
+    return (1/a**2) * r * delta_a(r, a)
+
+@njit
+def spread_q_prime(X, Y, xq, yq, n_x, n_y, q, dx, cut):
+    """Spread force with derivative (Numba optimized)"""
+    Ny, Nx = X.shape
+    Sq = np.zeros_like(X)
+    Nq = len(q)
+    
+    for k in range(Nq):
+        for i in range(Ny):
+            for j in range(Nx):
+                Rk = np.sqrt((X[i,j] - xq[k])**2 + (Y[i,j] - yq[k])**2)
+                if Rk <= cut:
+                    if Rk > 1e-12:  # Avoid division by zero
+                        n_dot_rhat = (n_x[k]*(X[i,j] - xq[k]) + n_y[k]*(Y[i,j] - yq[k]))/Rk
+                        Sq[i,j] += q[k] * n_dot_rhat * delta_r_func(Rk, dx)
+    return Sq
+
+@njit
+def interp_phi_prime(X, Y, xq, yq, n_x, n_y, Phi, dx, dy, cut):
+    """Interpolate field with derivative (Numba optimized)"""
+    Nq = len(xq)
+    Jphi = np.zeros(Nq)
+    Ny, Nx = X.shape
+    
+    for k in range(Nq):
+        for i in range(Ny):
+            for j in range(Nx):
+                Rk = np.sqrt((X[i,j] - xq[k])**2 + (Y[i,j] - yq[k])**2)
+                if Rk <= cut:
+                    if Rk > 1e-12:  # Avoid division by zero
+                        n_dot_rhat = (n_x[k]*(X[i,j] - xq[k]) + n_y[k]*(Y[i,j] - yq[k]))/Rk
+                        Jphi[k] += dx*dy * Phi[i,j] * n_dot_rhat * delta_r_func(Rk, dx)
+    return Jphi
+
+@njit
+def spread_q(X, Y, xq, yq, q, dx, cut):
+    """Spread force (Numba optimized)"""
+    Ny, Nx = X.shape
+    Sq = np.zeros_like(X)
+    Nq = len(q)
+    
+    for k in range(Nq):
+        for i in range(Ny):
+            for j in range(Nx):
+                Rk = np.sqrt((X[i,j] - xq[k])**2 + (Y[i,j] - yq[k])**2)
+                if Rk <= cut:
+                    Sq[i,j] += q[k] * delta_func(Rk, dx)
+    return Sq
+
+@njit
+def interp_phi(X, Y, xq, yq, Phi, dx, dy, cut):
+    """Interpolate field (Numba optimized)"""
+    Nq = len(xq)
+    Jphi = np.zeros(Nq)
+    Ny, Nx = X.shape
+    
+    for k in range(Nq):
+        for i in range(Ny):
+            for j in range(Nx):
+                Rk = np.sqrt((X[i,j] - xq[k])**2 + (Y[i,j] - yq[k])**2)
+                if Rk <= cut:
+                    Jphi[k] += dx*dy * Phi[i,j] * delta_func(Rk, dx)
+    return Jphi
+
+@njit
+def grad_dot_grad(Phi, N_pm, dx, dy, Phi_BC, N_pm_BC):
+    """Compute gradient dot product (Numba optimized)"""
+    Ny, Nx = Phi.shape
+    
+    # Create extended arrays for boundary conditions
+    Phi_BC_y = np.zeros((Ny+2, Nx))
+    Phi_BC_y[0,:] = Phi_BC[0,1:-1]  # Top boundary
+    Phi_BC_y[1:-1,:] = Phi
+    Phi_BC_y[-1,:] = Phi_BC[-1,1:-1]  # Bottom boundary
+    
+    N_pm_BC_y = np.zeros((Ny+2, Nx))
+    N_pm_BC_y[0,:] = N_pm_BC[0,1:-1]
+    N_pm_BC_y[1:-1,:] = N_pm
+    N_pm_BC_y[-1,:] = N_pm_BC[-1,1:-1]
+    
+    Phi_BC_x = np.zeros((Ny, Nx+2))
+    Phi_BC_x[:,0] = Phi_BC[1:-1,0]  # Left boundary
+    Phi_BC_x[:,1:-1] = Phi
+    Phi_BC_x[:,-1] = Phi_BC[1:-1,-1]  # Right boundary
+    
+    N_pm_BC_x = np.zeros((Ny, Nx+2))
+    N_pm_BC_x[:,0] = N_pm_BC[1:-1,0]
+    N_pm_BC_x[:,1:-1] = N_pm
+    N_pm_BC_x[:,-1] = N_pm_BC[1:-1,-1]
+    
+    # Compute derivatives
+    Phi_y = (0.5/dy) * (Phi_BC_y[2:,:] - Phi_BC_y[:-2,:])
+    N_pm_y = (0.5/dy) * (N_pm_BC_y[2:,:] - N_pm_BC_y[:-2,:])
+    Phi_x = (0.5/dx) * (Phi_BC_x[:,2:] - Phi_BC_x[:,:-2])
+    N_pm_x = (0.5/dx) * (N_pm_BC_x[:,2:] - N_pm_BC_x[:,:-2])
+    
+    G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
+    return G_d_G
+
+class PDESolver:
+    def __init__(self):
+        self.setup_parameters()
+        self.setup_grid()
+        self.setup_laplacian()
+        self.setup_boundary_conditions()
+        self.setup_immersed_boundary()
+        
+    def setup_parameters(self):
+        """Setup simulation parameters"""
+        self.Nx = 450
+        self.L = 2.0 * np.pi
+        self.beta_BC = 7.94
+        self.sigma_bc = 0.78
+        self.delta_layer = 0.1
+        self.rad = 0.25
+        self.beta = 0.2
+        self.m = 50
+        self.tol = 1e-5
+        
+    def setup_grid(self):
+        """Setup computational grid"""
+        x = np.linspace(-self.L/2, self.L/2, self.Nx+2)
+        self.dx = x[1] - x[0]
+        y = x.copy()
+        self.dy = y[1] - y[0]
+        
+        self.xint = x[1:-1]
+        self.yint = y[1:-1]
+        self.Ny = len(self.yint)
+        
+        X, Y = np.meshgrid(x, y)
+        self.Xint, self.Yint = np.meshgrid(self.xint, self.yint)
+        self.X, self.Y = X, Y
+        
+    def setup_laplacian(self):
+        """Setup finite difference Laplacian with Dirichlet BCs"""
+        e = (1/self.dy**2) * np.ones(self.Ny)
+        D2_d = sp.diags([e, -2*e, e], [-1, 0, 1], shape=(self.Ny, self.Ny))
+        I_nx = sp.eye(self.Nx)
+        I_ny = sp.eye(self.Ny)
+        self.Lap = sp.kron(I_nx, D2_d) + sp.kron(D2_d, I_ny)
+        
+    def setup_boundary_conditions(self):
+        """Setup boundary conditions"""
+        def Phi_exact(x, y):
+            return self.beta_BC * y
+            
+        def Npm_exact(x, y):
+            return np.ones_like(x)
+            
+        self.Phi_exact = Phi_exact
+        self.Npm_exact = Npm_exact
+        
+        # Boundary condition arrays
+        self.Phi_BCs = np.zeros_like(self.Xint)
+        self.Npm_BCs = np.zeros_like(self.Xint)
+        
+        # Apply boundary conditions
+        dy2 = self.dy**2
+        dx2 = self.dx**2
+        
+        self.Phi_BCs[0,:] = (1/dy2) * Phi_exact(self.xint, self.Y[0,0])
+        self.Phi_BCs[-1,:] += (1/dy2) * Phi_exact(self.xint, self.Y[-1,-1])
+        self.Phi_BCs[:,0] += (1/dx2) * Phi_exact(self.X[0,0], self.yint)
+        self.Phi_BCs[:,-1] += (1/dx2) * Phi_exact(self.X[-1,-1], self.yint)
+        
+        self.Npm_BCs[0,:] = (1/dy2) * Npm_exact(self.xint, self.Y[0,0])
+        self.Npm_BCs[-1,:] += (1/dy2) * Npm_exact(self.xint, self.Y[-1,-1])
+        self.Npm_BCs[:,0] += (1/dx2) * Npm_exact(self.X[0,0], self.yint)
+        self.Npm_BCs[:,-1] += (1/dx2) * Npm_exact(self.X[-1,-1], self.yint)
+        
+        # Boundary condition values for gradient computation
+        self.Phi_BC = Phi_exact(self.X, self.Y)
+        self.N_pm_BC = Npm_exact(self.X, self.Y)
+        
+    def setup_immersed_boundary(self):
+        """Setup immersed boundary points"""
+        dth = self.dx / self.rad
+        theta = np.arange(0, 2*np.pi, dth)
+        self.Nib = len(theta)
+        self.theta = theta
+        
+        self.xib = self.rad * np.cos(theta)
+        self.yib = self.rad * np.sin(theta)
+        self.n_x = np.cos(theta)
+        self.n_y = np.sin(theta)
+        
+        self.cut = 6 * 1.2 * self.dx
+        
+    def constrained_lap(self, ctxt, ctxt_prev):
+        """Constrained Laplacian operator"""
+        A_x_Ctx = np.zeros_like(ctxt)
+        
+        sz = self.Nx * self.Ny
+        Phi = ctxt[:sz]
+        N_p = ctxt[sz:2*sz]
+        N_m = ctxt[2*sz:3*sz]
+        q_i = 3*sz
+        Q = ctxt[q_i:q_i+self.Nib]
+        Q_p = ctxt[q_i+self.Nib:q_i+2*self.Nib]
+        Q_m = ctxt[q_i+2*self.Nib:q_i+3*self.Nib]
+        
+        # Spread operations
+        SQ = spread_q_prime(self.Xint, self.Yint, self.xib, self.yib, 
+                           self.n_x, self.n_y, Q, self.dx, self.cut)
+        SQ_p = spread_q_prime(self.Xint, self.Yint, self.xib, self.yib, 
+                             self.n_x, self.n_y, Q_p, self.dx, self.cut)
+        SQ_m = spread_q_prime(self.Xint, self.Yint, self.xib, self.yib, 
+                             self.n_x, self.n_y, Q_m, self.dx, self.cut)
+        
+        dl2 = self.delta_layer**2
+        A_x_Ctx[:sz] = dl2*Phi + spsolve(self.Lap, 0.5*N_p - 0.5*N_m + SQ.ravel())
+        A_x_Ctx[sz:2*sz] = N_p + spsolve(self.Lap, SQ_p.ravel())
+        A_x_Ctx[2*sz:3*sz] = N_m + spsolve(self.Lap, SQ_m.ravel())
+        
+        # Interpolation operations
+        A_x_Ctx[q_i:q_i+self.Nib] = interp_phi_prime(
+            self.Xint, self.Yint, self.xib, self.yib, self.n_x, self.n_y,
+            Phi.reshape(self.Ny, self.Nx), self.dx, self.dy, self.cut)
+        A_x_Ctx[q_i+self.Nib:q_i+2*self.Nib] = interp_phi_prime(
+            self.Xint, self.Yint, self.xib, self.yib, self.n_x, self.n_y,
+            N_p.reshape(self.Ny, self.Nx), self.dx, self.dy, self.cut)
+        A_x_Ctx[q_i+2*self.Nib:q_i+3*self.Nib] = interp_phi_prime(
+            self.Xint, self.Yint, self.xib, self.yib, self.n_x, self.n_y,
+            N_m.reshape(self.Ny, self.Nx), self.dx, self.dy, self.cut)
+        
+        return A_x_Ctx
+    
+    def build_rhs(self, ctxt, ctxt_BCs):
+        """Build right-hand side vector"""
+        b_Ctx = np.zeros_like(ctxt_BCs)
+        
+        sz = self.Nx * self.Ny
+        q_i = 3*sz
+        Phi = ctxt[:sz]
+        N_p = ctxt[sz:2*sz]
+        N_m = ctxt[2*sz:3*sz]
+        
+        Phi_BC = ctxt_BCs[:sz]
+        N_p_BC = ctxt_BCs[sz:2*sz]
+        N_m_BC = ctxt_BCs[2*sz:3*sz]
+        Q_BC = ctxt_BCs[q_i:q_i+self.Nib]
+        Q_p_BC = ctxt_BCs[q_i+self.Nib:q_i+2*self.Nib]
+        Q_m_BC = ctxt_BCs[q_i+2*self.Nib:q_i+3*self.Nib]
+        
+        dl2 = self.delta_layer**2
+        b_Ctx[:sz] = spsolve(self.Lap, -dl2*Phi_BC)
+        
+        # Compute gradient dot gradient terms
+        Phi_2d = Phi.reshape(self.Ny, self.Nx)
+        N_p_2d = N_p.reshape(self.Ny, self.Nx)
+        N_m_2d = N_m.reshape(self.Ny, self.Nx)
+        
+        G_d_G_p = grad_dot_grad(Phi_2d, N_p_2d, self.dx, self.dy, 
+                               self.Phi_BC, self.N_pm_BC)
+        G_d_G_m = grad_dot_grad(Phi_2d, N_m_2d, self.dx, self.dy, 
+                               self.Phi_BC, self.N_pm_BC)
+        
+        Lap_Phi = self.Lap @ Phi
+        b_Ctx[sz:2*sz] = spsolve(self.Lap, -N_p*(Lap_Phi + Phi_BC) - N_p_BC - G_d_G_p.ravel())
+        b_Ctx[2*sz:3*sz] = spsolve(self.Lap, N_m*(Lap_Phi + Phi_BC) - N_m_BC + G_d_G_m.ravel())
+        
+        b_Ctx[q_i:q_i+self.Nib] = Q_BC
+        
+        # Interpolation terms
+        J_N_p = interp_phi(self.Xint, self.Yint, self.xib, self.yib, 
+                          N_p_2d, self.dx, self.dy, self.cut)
+        J_N_m = interp_phi(self.Xint, self.Yint, self.xib, self.yib, 
+                          N_m_2d, self.dx, self.dy, self.cut)
+        J_Phi_prime = interp_phi_prime(self.Xint, self.Yint, self.xib, self.yib,
+                                      self.n_x, self.n_y, Phi_2d, self.dx, self.dy, self.cut)
+        
+        b_Ctx[q_i+self.Nib:q_i+2*self.Nib] = Q_p_BC - J_N_p * J_Phi_prime
+        b_Ctx[q_i+2*self.Nib:q_i+3*self.Nib] = Q_m_BC + J_N_m * J_Phi_prime
+        
+        return b_Ctx
+    
+    def solve(self, max_iterations=100000):
+        """Main solver using Anderson acceleration"""
+        # Initialize context vector
+        sz = self.Nx * self.Ny
+        
+        # Simple initialization (can be replaced with loaded data)
+        Phi_init = self.Phi_exact(self.Xint, self.Yint)
+        N_p_init = self.Npm_exact(self.Xint, self.Yint)
+        N_m_init = self.Npm_exact(self.Xint, self.Yint)
+        Q_init = np.zeros(self.Nib) - (self.sigma_bc/self.delta_layer)
+        Q_p_init = np.zeros(self.Nib)
+        Q_m_init = np.zeros(self.Nib)
+        
+        ctxt = np.concatenate([
+            Phi_init.ravel(), N_p_init.ravel(), N_m_init.ravel(),
+            Q_init, Q_p_init, Q_m_init
+        ])
+        
+        # Boundary conditions context
+        ctxt_BCs = np.concatenate([
+            self.Phi_BCs.ravel(), self.Npm_BCs.ravel(), self.Npm_BCs.ravel(),
+            np.zeros(self.Nib) - (self.sigma_bc/self.delta_layer),
+            np.zeros(self.Nib), np.zeros(self.Nib)
+        ])
+        
+        # Anderson acceleration arrays
+        DU = np.full((len(ctxt), self.m), np.nan)
+        DG = np.full((len(ctxt), self.m), np.nan)
+        
+        u_n = ctxt.copy()
+        
+        # Initial GMRES solve
+        RHS = self.build_rhs(ctxt, ctxt_BCs)
+        AxOp = lambda xx: self.constrained_lap(xx, ctxt)
+        
+        G_u_n, info = gmres(AxOp, RHS, tol=self.tol, maxiter=1000, x0=u_n)
+        if info != 0:
+            print(f"GMRES warning: convergence info = {info}")
+        
+        u_next = G_u_n.copy()
+        G_u_next = G_u_n.copy()
+        
+        err = []
+        
+        for its in range(max_iterations):
+            RHS = self.build_rhs(u_next, ctxt_BCs)
+            AxOp = lambda xx: self.constrained_lap(xx, u_next)
+            
+            G_u_next, info = gmres(AxOp, RHS, tol=self.tol, maxiter=1000, x0=u_next)
+            if info != 0 and its % 100 == 0:
+                print(f"GMRES warning at iteration {its}: convergence info = {info}")
+            
+            # Anderson acceleration
+            m_n = min(self.m, its + 1)
+            col_idx = (its) % self.m
+            
+            DU[:, col_idx] = u_next - u_n
+            DG[:, col_idx] = G_u_next - G_u_n
+            
+            f_n = G_u_next - u_next
+            
+            if its >= 1:
+                # QR decomposition for Anderson acceleration
+                if m_n <= self.m:
+                    DF = DG[:, :m_n] - DU[:, :m_n]
+                else:
+                    DF = DG - DU
+                
+                try:
+                    Q, R = np.linalg.qr(DF, mode='reduced')
+                    gamma = np.linalg.solve(R, Q.T @ f_n)
+                    
+                    if m_n <= self.m:
+                        u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-self.beta)*(f_n - DF @ gamma)
+                    else:
+                        u_next = (G_u_next - DG @ gamma) - (1-self.beta)*(f_n - DF @ gamma)
+                except np.linalg.LinAlgError:
+                    u_next = G_u_next  # Fall back to fixed point iteration
+            else:
+                u_next = G_u_next
+                
+            u_n = u_next.copy()
+            G_u_n = G_u_next.copy()
+            
+            # Check convergence
+            RHS = self.build_rhs(u_next, ctxt_BCs)
+            residual = np.linalg.norm(self.constrained_lap(u_next, u_next) - RHS) / np.linalg.norm(RHS)
+            err.append(residual)
+            
+            if its % 10 == 0:
+                print(f'Iteration {its}: residual = {residual:.2e}')
+            
+            if residual < 1e-4:
+                print(f'Converged at iteration {its}')
+                break
+                
+            # Visualization every 50 iterations
+            if its % 50 == 0:
+                Np = u_next[sz:2*sz].reshape(self.Ny, self.Nx)
+                plt.clf()
+                plt.contourf(self.Xint, self.Yint, Np, 20)
+                plt.colorbar()
+                plt.title(f'N_p at iteration {its}')
+                plt.xlabel('x')
+                plt.ylabel('y')
+                plt.pause(0.1)
+        
+        self.solution = u_next
+        self.error_history = err
+        return u_next, err
+    
+    def plot_results(self):
+        """Plot final results"""
+        if not hasattr(self, 'solution'):
+            print("No solution found. Run solve() first.")
+            return
+            
+        sz = self.Nx * self.Ny
+        Phi = self.solution[:sz].reshape(self.Ny, self.Nx)
+        Np = self.solution[sz:2*sz].reshape(self.Ny, self.Nx)
+        Nm = self.solution[2*sz:3*sz].reshape(self.Ny, self.Nx)
+        
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        
+        # Plot Phi
+        im1 = axes[0,0].contourf(self.Xint, self.Yint, Phi, 20)
+        axes[0,0].set_title('Potential Φ')
+        axes[0,0].set_xlabel('x')
+        axes[0,0].set_ylabel('y')
+        plt.colorbar(im1, ax=axes[0,0])
+        
+        # Plot N_p
+        im2 = axes[0,1].contourf(self.Xint, self.Yint, Np, 20)
+        axes[0,1].set_title('N_p')
+        axes[0,1].set_xlabel('x')
+        axes[0,1].set_ylabel('y')
+        plt.colorbar(im2, ax=axes[0,1])
+        
+        # Plot N_m
+        im3 = axes[1,0].contourf(self.Xint, self.Yint, Nm, 20)
+        axes[1,0].set_title('N_m')
+        axes[1,0].set_xlabel('x')
+        axes[1,0].set_ylabel('y')
+        plt.colorbar(im3, ax=axes[1,0])
+        
+        # Plot convergence
+        if hasattr(self, 'error_history'):
+            axes[1,1].semilogy(self.error_history)
+            axes[1,1].set_title('Convergence History')
+            axes[1,1].set_xlabel('Iteration')
+            axes[1,1].set_ylabel('Residual')
+            axes[1,1].grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+
+# Usage example
+if __name__ == "__main__":
+    # Create solver instance
+    solver = PDESolver()
+    
+    print("Starting PDE solver...")
+    print(f"Grid size: {solver.Nx} x {solver.Ny}")
+    print(f"Number of IB points: {solver.Nib}")
+    
+    # Solve the system
+    solution, errors = solver.solve(max_iterations=1000)
+    
+    # Plot results
+    solver.plot_results()
+    
+    print(f"Final residual: {errors[-1]:.2e}")
+    print(f"Converged in {len(errors)} iterations")
