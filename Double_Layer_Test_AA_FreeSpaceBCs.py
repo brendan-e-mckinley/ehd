@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.sparse import spdiags, eye, kron
-from scipy.sparse.linalg import spsolve, gmres
+from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.linalg import qr
 from scipy.io import loadmat, savemat
 from scipy.interpolate import griddata, interp1d
@@ -302,7 +302,7 @@ DG = np.full((len(RHS), m), np.nan)
 tol = 1e-5
 u_n = ctxt.copy()
 RHS = b_Op(ctxt)
-AxOp = lambda xx: AxOp_prev(xx, ctxt)
+AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, ctxt))
 
 # Initial GMRES solve
 G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, x0=u_n)
@@ -316,7 +316,7 @@ err = []
 # Anderson acceleration loop
 for its in range(100000):
     RHS = b_Op(u_next)
-    AxOp = lambda xx: AxOp_prev(xx, u_next)
+    AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, u_next))
     G_u_next, info = gmres(AxOp, RHS, tol=tol, maxiter=1000, x0=u_next)
     
     if info != 0:
