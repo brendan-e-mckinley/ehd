@@ -319,7 +319,7 @@ function [Sq] = spreadQ(X,Y,xq,yq,q,delta,cut)
     end
 end
 
-% Charge interpolation operation
+
 function [Jphi] = interpPhi(X,Y,xq,yq,Phi,delta,cut)
     Jphi = 0*xq;
     Nq = length(xq);
