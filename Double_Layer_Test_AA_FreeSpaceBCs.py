@@ -67,8 +67,8 @@ Npm_BCs[:, -1] += (1/dx/dx) * Npm_exact(X[-1, -1], yint)
 
 RHS = np.zeros_like(Xint)
 
-Test_Phi = spsolve(Lap, RHS.flatten() - Phi_BCs.flatten())
-Test_Npm = spsolve(Lap, RHS.flatten() - Npm_BCs.flatten())
+Test_Phi = spsolve(Lap, RHS.flatten(order='F') - Phi_BCs.flatten(order='F'))
+Test_Npm = spsolve(Lap, RHS.flatten(order='F') - Npm_BCs.flatten(order='F'))
 
 fig = plt.figure(figsize=(15, 6))
 ax1 = fig.add_subplot(121, projection='3d')
@@ -169,15 +169,15 @@ def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     N_pm_x = (0.5/dx) * (N_pm_BC_x[:, 2:] - N_pm_BC_x[:, :-2])
     
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
-    return G_d_G.flatten()
+    return G_d_G.flatten(order='F')
 
 G_d_G = lambda Phi, N_pm: Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
 # Boundary conditions context
 ctxt_BCs = np.concatenate([
-    Phi_BCs.flatten(),
-    Npm_BCs.flatten(),
-    Npm_BCs.flatten(),
+    Phi_BCs.flatten(order='F'),
+    Npm_BCs.flatten(order='F'),
+    Npm_BCs.flatten(order='F'),
     np.zeros(len(xib)) - (sigma_bc/delta_layer),
     np.zeros(len(xib)),
     np.zeros(len(xib))
@@ -204,9 +204,9 @@ def Constrained_Lap(ctxt, ctxt_prev, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, So
     SQ_m = Sop_prime(Q_m)
     
     dl2 = delta_layer**2
-    A_x_Ctx[:sz] = dl2 * Phi + spsolve(Lap, 0.5*N_p - 0.5*N_m + SQ.flatten())
-    A_x_Ctx[sz:2*sz] = N_p + spsolve(Lap, SQ_p.flatten())
-    A_x_Ctx[2*sz:3*sz] = N_m + spsolve(Lap, SQ_m.flatten())
+    A_x_Ctx[:sz] = dl2 * Phi + spsolve(Lap, 0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
+    A_x_Ctx[sz:2*sz] = N_p + spsolve(Lap, SQ_p.flatten(order='F'))
+    A_x_Ctx[2*sz:3*sz] = N_m + spsolve(Lap, SQ_m.flatten(order='F'))
     A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx))
     A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx))
     A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx))
@@ -240,6 +240,30 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop,
     
     return b_Ctx
 
+class ConstrainedLapOperator:
+    def __init__(self, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
+        self.Lap = Lap
+        self.delta_layer = delta_layer
+        self.Nx = Nx
+        self.Ny = Ny
+        self.Nib = Nib
+        self.Sop = Sop
+        self.Jop = Jop
+        self.Sop_prime = Sop_prime
+        self.Jop_prime = Jop_prime
+        self.ctxt_prev = None
+    
+    def set_context(self, ctxt_prev):
+        self.ctxt_prev = ctxt_prev.copy()  # Make a copy to avoid reference issues
+    
+    def matvec(self, xx):
+        return Constrained_Lap(xx, self.ctxt_prev, self.Lap, self.delta_layer, 
+                              self.Nx, self.Ny, self.Nib, self.Sop, self.Jop, 
+                              self.Sop_prime, self.Jop_prime)
+
+# Create the operator once
+lap_operator = ConstrainedLapOperator(Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
+
 # Load initial conditions from .mat file
 ld = loadmat('BC_run_N_300_r0p25.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
@@ -250,7 +274,7 @@ Nx_ld = int(ld['Nx'][0, 0])
 Nib_ld = int(ld['Nib'][0, 0])
 sz = Ny_ld * Nx_ld
 
-ctxt_ld = ld['ctxt'].flatten()
+ctxt_ld = ld['ctxt'].flatten(order='F')
 Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld)
 N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld)
 N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld)
@@ -260,15 +284,15 @@ Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
-theta_ld = ld['theta'].flatten()
+theta_ld = ld['theta'].flatten(order='F')
 
 # Interpolate to current grid
-points_ld = np.column_stack([Xint_ld.flatten(), Yint_ld.flatten()])
-points_new = np.column_stack([Xint.flatten(), Yint.flatten()])
+points_ld = np.column_stack([Xint_ld.flatten(), Yint_ld.flatten(order='F')])
+points_new = np.column_stack([Xint.flatten(), Yint.flatten(order='F')])
 
-Phi_init = griddata(points_ld, Phi_ld.flatten(), points_new, method=METHOD, fill_value=0).reshape(Ny, Nx)
-N_p_init = griddata(points_ld, N_p_ld.flatten(), points_new, method=METHOD, fill_value=1).reshape(Ny, Nx)
-N_m_init = griddata(points_ld, N_m_ld.flatten(), points_new, method=METHOD, fill_value=1).reshape(Ny, Nx)
+Phi_init = griddata(points_ld, Phi_ld.flatten(order='F'), points_new, method=METHOD, fill_value=0).reshape(Ny, Nx)
+N_p_init = griddata(points_ld, N_p_ld.flatten(order='F'), points_new, method=METHOD, fill_value=1).reshape(Ny, Nx)
+N_m_init = griddata(points_ld, N_m_ld.flatten(order='F'), points_new, method=METHOD, fill_value=1).reshape(Ny, Nx)
 
 # Interpolate boundary quantities
 Q_init = interp1d(theta_ld, Q_ld, kind=METHOD, bounds_error=False, fill_value='extrapolate')(theta)
@@ -276,9 +300,9 @@ Q_p_init = interp1d(theta_ld, Q_p_ld, kind=METHOD, bounds_error=False, fill_valu
 Q_m_init = interp1d(theta_ld, Q_m_ld, kind=METHOD, bounds_error=False, fill_value='extrapolate')(theta)
 
 ctxt = np.concatenate([
-    Phi_init.flatten(),
-    N_p_init.flatten(),
-    N_m_init.flatten(),
+    Phi_init.flatten(order='F'),
+    N_p_init.flatten(order='F'),
+    N_m_init.flatten(order='F'),
     Q_init,
     Q_p_init,
     Q_m_init
@@ -305,7 +329,9 @@ RHS = b_Op(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, ctxt))
 
 # Initial GMRES solve
-G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, x0=u_n)
+lap_operator.set_context(ctxt)
+AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
+G_u_n, info = gmres(AxOp, RHS, atol=tol, maxiter=1000, x0=u_n)
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
 
@@ -316,8 +342,9 @@ err = []
 # Anderson acceleration loop
 for its in range(100000):
     RHS = b_Op(u_next)
-    AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, u_next))
-    G_u_next, info = gmres(AxOp, RHS, tol=tol, maxiter=1000, x0=u_next)
+    lap_operator.set_context(u_next)  # Update the context
+    AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
+    G_u_next, info = gmres(AxOp, RHS, atol=tol, maxiter=1000, x0=u_next)
     
     if info != 0:
         print(f'GMRES warning at iteration {its}: convergence info = {info}')
