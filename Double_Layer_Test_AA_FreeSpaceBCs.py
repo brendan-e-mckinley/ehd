@@ -4,7 +4,7 @@ from scipy.sparse import spdiags, eye, kron
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.linalg import qr
 from scipy.io import loadmat, savemat
-from scipy.interpolate import griddata, interp1d
+from scipy.interpolate import RegularGridInterpolator, interp1d
 
 # Set up plotting parameters (equivalent to MATLAB set commands)
 plt.rcParams.update({
@@ -275,24 +275,38 @@ Nib_ld = int(ld['Nib'][0, 0])
 sz = Ny_ld * Nx_ld
 
 ctxt_ld = ld['ctxt'].flatten(order='F')
-Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld)
-N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld)
-N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld)
+Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')  # Important: use Fortran order
+N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
+N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
 Q_ld = ctxt_ld[3*sz:3*sz+Nib_ld]
 Q_p_ld = ctxt_ld[3*sz+Nib_ld:3*sz+2*Nib_ld]
 Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
-theta_ld = ld['theta'].flatten(order='F')
+theta_ld = ld['theta'].flatten()
 
-# Interpolate to current grid
-points_ld = np.column_stack([Xint_ld.flatten(), Yint_ld.flatten(order='F')])
-points_new = np.column_stack([Xint.flatten(), Yint.flatten(order='F')])
+# Extract the coordinate vectors from the loaded grid
+x_ld = Xint_ld[0, :]  # First row gives x-coordinates
+y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-Phi_init = griddata(points_ld, Phi_ld.flatten(order='F'), points_new, method=METHOD, fill_value=0).reshape(Ny, Nx)
-N_p_init = griddata(points_ld, N_p_ld.flatten(order='F'), points_new, method=METHOD, fill_value=1).reshape(Ny, Nx)
-N_m_init = griddata(points_ld, N_m_ld.flatten(order='F'), points_new, method=METHOD, fill_value=1).reshape(Ny, Nx)
+# Create RegularGridInterpolator objects, extrapolate if outside bounds
+# Note: RegularGridInterpolator expects (y, x) order for 2D data
+Phi_interp = RegularGridInterpolator((y_ld, x_ld), Phi_ld, 
+                                     method=METHOD, bounds_error=False, fill_value=None)
+N_p_interp = RegularGridInterpolator((y_ld, x_ld), N_p_ld, 
+                                     method=METHOD, bounds_error=False, fill_value=None)
+N_m_interp = RegularGridInterpolator((y_ld, x_ld), N_m_ld, 
+                                     method=METHOD, bounds_error=False, fill_value=None)
+
+# Create interpolation points for the new grid
+# RegularGridInterpolator expects points as (y, x) pairs
+points_new = np.column_stack([Xint.flatten(order='F'), Yint.flatten(order='F')])
+
+# Perform interpolation
+Phi_init = Phi_interp(points_new).reshape(Ny, Nx)
+N_p_init = N_p_interp(points_new).reshape(Ny, Nx)
+N_m_init = N_m_interp(points_new).reshape(Ny, Nx)
 
 # Interpolate boundary quantities
 Q_init = interp1d(theta_ld, Q_ld, kind=METHOD, bounds_error=False, fill_value='extrapolate')(theta)
