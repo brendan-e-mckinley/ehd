@@ -153,8 +153,8 @@ N_pm_BC = Npm_exact(X, Y)
 
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     # Phi_x * N_x + Phi_y * N_y
-    Phi = Phi.reshape(Ny, Nx)
-    N_pm = N_pm.reshape(Ny, Nx)
+    Phi = Phi.reshape(Ny, Nx).T
+    N_pm = N_pm.reshape(Ny, Nx).T
     
     Phi_BC_y = np.vstack([Phi_BC[0, 1:-1].reshape(1, -1), Phi, Phi_BC[-1, 1:-1].reshape(1, -1)])
     Phi_y = (0.5/dy) * (Phi_BC_y[2:, :] - Phi_BC_y[:-2, :])
@@ -231,7 +231,6 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop,
     
     dl2 = delta_layer**2
     b_Ctx[:sz] = spsolve(Lap, -dl2 * Phi_BC)
-    
     b_Ctx[sz:2*sz] = spsolve(Lap, -N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
     b_Ctx[2*sz:3*sz] = spsolve(Lap, N_m * (Lap @ Phi + Phi_BC) - N_m_BC + G_d_G(Phi, N_m))
     b_Ctx[q_i:q_i+Nib] = Q_BC
@@ -267,7 +266,6 @@ lap_operator = ConstrainedLapOperator(Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, S
 # Load initial conditions from .mat file
 ld = loadmat('BC_run_N_300_r0p25.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
-EMETHOD = 'nearest'
 
 Ny_ld = int(ld['Ny'][0, 0])
 Nx_ld = int(ld['Nx'][0, 0])
