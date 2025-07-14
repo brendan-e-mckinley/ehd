@@ -120,9 +120,10 @@ Q_ld = ld.ctxt(3*sz+1:3*sz+Nib_ld);
 Q_p_ld = ld.ctxt(3*sz+Nib_ld+1:3*sz+2*Nib_ld);
 Q_m_ld = ld.ctxt(3*sz+2*Nib_ld+1:3*sz+3*Nib_ld);
 %%%
-Phi_init_f = griddedInterpolant(ld.Xint',ld.Yint',Phi_ld',METHOD,EMETHOD);
+Phi_init_f = griddedInterpolant(ld.Xint',ld.Yint',Phi_ld',METHOD,'linear');
 N_p_init_f = griddedInterpolant(ld.Xint',ld.Yint',N_p_ld',METHOD,EMETHOD);
 N_m_init_f = griddedInterpolant(ld.Xint',ld.Yint',N_m_ld',METHOD,EMETHOD);
+
 Phi_init = Phi_init_f(Xint',Yint')';
 N_p_init = N_p_init_f(Xint',Yint')';
 N_m_init = N_m_init_f(Xint',Yint')';

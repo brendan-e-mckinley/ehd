@@ -4,9 +4,9 @@ from scipy.sparse import spdiags, eye, kron
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.linalg import qr
 from scipy.io import loadmat, savemat
-from scipy.interpolate import RegularGridInterpolator, interp1d
+from scipy.interpolate import RegularGridInterpolator, Akima1DInterpolator, interpn
 
-# Set up plotting parameters (equivalent to MATLAB set commands)
+# Set up plotting parameters
 plt.rcParams.update({
     'font.size': 35,
     'lines.linewidth': 3,
@@ -195,10 +195,6 @@ def Constrained_Lap(ctxt, ctxt_prev, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, So
     Q_p = ctxt[q_i+Nib:q_i+2*Nib]
     Q_m = ctxt[q_i+2*Nib:q_i+3*Nib]
     
-    Phi_prev = ctxt_prev[:sz]
-    N_p_prev = ctxt_prev[sz:2*sz]
-    N_m_prev = ctxt_prev[2*sz:3*sz]
-    
     SQ = Sop_prime(Q)
     SQ_p = Sop_prime(Q_p)
     SQ_m = Sop_prime(Q_m)
@@ -288,28 +284,24 @@ theta_ld = ld['theta'].flatten()
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-# Create RegularGridInterpolator objects, extrapolate if outside bounds
-# Note: RegularGridInterpolator expects (y, x) order for 2D data
-Phi_interp = RegularGridInterpolator((y_ld, x_ld), Phi_ld, 
-                                     method=METHOD, bounds_error=False, fill_value=None)
-N_p_interp = RegularGridInterpolator((y_ld, x_ld), N_p_ld, 
-                                     method=METHOD, bounds_error=False, fill_value=None)
-N_m_interp = RegularGridInterpolator((y_ld, x_ld), N_m_ld, 
-                                     method=METHOD, bounds_error=False, fill_value=None)
+Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+#N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+#N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 
-# Create interpolation points for the new grid
-# RegularGridInterpolator expects points as (y, x) pairs
+N_p_init_f = RegularGridInterpolator((x_ld, y_ld), N_p_ld, 
+                                    method=METHOD, bounds_error=False, fill_value=None)
+N_m_init_f = RegularGridInterpolator((x_ld, y_ld), N_m_ld, 
+                                    method=METHOD, bounds_error=False, fill_value=None)
+
 points_new = np.column_stack([Xint.flatten(order='F'), Yint.flatten(order='F')])
 
-# Perform interpolation
-Phi_init = Phi_interp(points_new).reshape(Ny, Nx)
-N_p_init = N_p_interp(points_new).reshape(Ny, Nx)
-N_m_init = N_m_interp(points_new).reshape(Ny, Nx)
+N_p_init = N_p_init_f(points_new).reshape(Ny, Nx)
+N_m_init = N_m_init_f(points_new).reshape(Ny, Nx)
 
 # Interpolate boundary quantities
-Q_init = interp1d(theta_ld, Q_ld, kind=METHOD, bounds_error=False, fill_value='extrapolate')(theta)
-Q_p_init = interp1d(theta_ld, Q_p_ld, kind=METHOD, bounds_error=False, fill_value='extrapolate')(theta)
-Q_m_init = interp1d(theta_ld, Q_m_ld, kind=METHOD, bounds_error=False, fill_value='extrapolate')(theta)
+Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
+Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
+Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
 ctxt = np.concatenate([
     Phi_init.flatten(order='F'),
@@ -343,7 +335,7 @@ AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, ctxt
 # Initial GMRES solve
 lap_operator.set_context(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-G_u_n, info = gmres(AxOp, RHS, atol=tol, maxiter=1000, x0=u_n)
+G_u_n, info = gmres(AxOp, RHS, atol=tol, maxiter=1000, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
 
