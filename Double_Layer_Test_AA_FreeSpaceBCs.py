@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from numba import jit
+from sksparse.cholmod import cholesky
 from scipy.sparse import spdiags, eye, kron
-from scipy.sparse.linalg import spsolve, gmres, LinearOperator
+from scipy.sparse.linalg import spsolve, gmres, LinearOperator, splu
 from scipy.linalg import qr
 from scipy.io import loadmat, savemat
 from scipy.interpolate import RegularGridInterpolator, Akima1DInterpolator, interpn
@@ -37,7 +39,7 @@ e = (1/dy**2) * np.ones(Ny)
 D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
 I_nx = eye(Nx)
 I_ny = eye(Ny)
-Lap = kron(I_nx, D2_d) + kron(D2_d, I_ny)
+Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
 
 # Parameters
 beta_BC = 7.94
@@ -88,28 +90,49 @@ n_x = np.cos(theta)
 n_y = np.sin(theta)
 
 # Delta functions
+@jit(nopython=True)
 def delta_a(r, a):
     return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
 
+@jit(nopython=True)
 def delta(r):
     return delta_a(r, 1.2*dx)
 
+@jit(nopython=True)
 def delta_r(r):
     return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
 
 cut = 6 * 1.2 * dx
 
 # Define operators
+
+@jit(nopython=True)
 def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
+
+    X_flat = X.ravel()
+    Y_flat = Y.ravel()
+    Sq_flat = Sq.ravel()
+
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-        n_dot_rhat = (n_x[k]*(X[mask] - xq[k]) + n_y[k]*(Y[mask] - yq[k])) / Rk[mask]
-        Sq[mask] += q[k] * n_dot_rhat * delta_r(Rk[mask])
+
+        mask_flat = mask.ravel()
+        Rk_flat = Rk.ravel()
+
+        X_masked = X_flat[mask_flat]
+        Y_masked = Y_flat[mask_flat]
+        Rk_masked = Rk_flat[mask_flat]
+
+        n_dot_rhat = (n_x[k]*(X_masked - xq[k]) + n_y[k]*(Y_masked - yq[k])) / Rk_masked
+        Sq_flat[mask_flat] += q[k] * n_dot_rhat * delta_r(Rk_masked)
+
+    Sq = Sq_flat.reshape(X.shape)
     return Sq
 
+@jit(nopython=True)
 def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     Jphi = np.zeros_like(xq)
     Nq = len(xq)
@@ -118,19 +141,42 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-        n_dot_rhat = (n_x[k]*(X[mask] - xq[k]) + n_y[k]*(Y[mask] - yq[k])) / Rk[mask]
-        Jphi[k] = dx_loc * dy_loc * np.sum(Phi[mask] * n_dot_rhat * delta_r(Rk[mask]))
+        
+        mask_flat = mask.ravel()
+        X_flat = X.ravel()
+        Y_flat = Y.ravel()
+        Phi_flat = Phi.ravel()
+        Rk_flat = Rk.ravel()
+        
+        X_masked = X_flat[mask_flat]
+        Y_masked = Y_flat[mask_flat]
+        Phi_masked = Phi_flat[mask_flat]
+        Rk_masked = Rk_flat[mask_flat]
+        
+        n_dot_rhat = (n_x[k]*(X_masked - xq[k]) + n_y[k]*(Y_masked - yq[k])) / Rk_masked
+        Jphi[k] = dx_loc * dy_loc * np.sum(Phi_masked * n_dot_rhat * delta_r(Rk_masked))
     return Jphi
 
+@jit(nopython=True)
 def spreadQ(X, Y, xq, yq, q, delta, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
+    Sq_flat = Sq.ravel()
+
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-        Sq[mask] += q[k] * delta(Rk[mask])
+
+        mask_flat = mask.ravel()
+        Rk_flat = Rk.ravel()
+
+        Rk_masked = Rk_flat[mask_flat]
+        Sq_flat[mask_flat] += q[k] * delta(Rk_masked)
+
+    Sq = Sq_flat.reshape(X.shape)
     return Sq
 
+@jit(nopython=True)
 def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     Jphi = np.zeros_like(xq)
     Nq = len(xq)
@@ -139,7 +185,15 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-        Jphi[k] = dx_loc * dy_loc * np.sum(Phi[mask] * delta(Rk[mask]))
+
+        mask_flat = mask.ravel()
+        Phi_flat = Phi.ravel()
+        Rk_flat = Rk.ravel()
+
+        Phi_masked = Phi_flat[mask_flat]
+        Rk_masked = Rk_flat[mask_flat]
+
+        Jphi[k] = dx_loc * dy_loc * np.sum(Phi_masked * delta(Rk_masked))
     return Jphi
 
 # Define lambda functions for operators
@@ -183,7 +237,7 @@ ctxt_BCs = np.concatenate([
     np.zeros(len(xib))
 ])
 
-def Constrained_Lap(ctxt, ctxt_prev, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
+def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
     A_x_Ctx = np.zeros_like(ctxt)
     
     sz = Nx * Ny
@@ -200,16 +254,24 @@ def Constrained_Lap(ctxt, ctxt_prev, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, So
     SQ_m = Sop_prime(Q_m)
     
     dl2 = delta_layer**2
-    A_x_Ctx[:sz] = dl2 * Phi + spsolve(Lap, 0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
-    A_x_Ctx[sz:2*sz] = N_p + spsolve(Lap, SQ_p.flatten(order='F'))
-    A_x_Ctx[2*sz:3*sz] = N_m + spsolve(Lap, SQ_m.flatten(order='F'))
-    A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx))
-    A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx))
-    A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx))
+
+    #check1 = dl2 * Phi + spsolve(Lap, 0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
+    #check2 = N_p + spsolve(Lap, SQ_p.flatten(order='F'))
+    #check3 = N_m + spsolve(Lap, SQ_m.flatten(order='F'))
+    #check4 = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    #check5 = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
+    #check6 = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
+
+    A_x_Ctx[:sz] = dl2 * Phi + dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
+    A_x_Ctx[sz:2*sz] = N_p +  dLap.solve_A(SQ_p.flatten(order='F'))
+    A_x_Ctx[2*sz:3*sz] = N_m + dLap.solve_A(SQ_m.flatten(order='F'))
+    A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
+    A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
     
     return A_x_Ctx
 
-def Build_RHS(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
+def Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -226,18 +288,26 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop,
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
     
     dl2 = delta_layer**2
-    b_Ctx[:sz] = spsolve(Lap, -dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] = spsolve(Lap, -N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
-    b_Ctx[2*sz:3*sz] = spsolve(Lap, N_m * (Lap @ Phi + Phi_BC) - N_m_BC + G_d_G(Phi, N_m))
+
+    #check1 = spsolve(Lap, -dl2 * Phi_BC)
+    #check2 = spsolve(Lap, -N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
+    #check3 = spsolve(Lap, N_m * (Lap @ Phi + Phi_BC) - N_m_BC + G_d_G(Phi, N_m))
+    #check4 = Q_BC
+    #check5 = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    #check6 = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    
+    b_Ctx[:sz] =  dLap.solve_A(-dl2 * Phi_BC)
+    b_Ctx[sz:2*sz] =  dLap.solve_A(-N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
+    b_Ctx[2*sz:3*sz] =  dLap.solve_A(N_m * (Lap @ Phi + Phi_BC) - N_m_BC + G_d_G(Phi, N_m))
     b_Ctx[q_i:q_i+Nib] = Q_BC
-    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx)) * Jop_prime(Phi.reshape(Ny, Nx))
-    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx)) * Jop_prime(Phi.reshape(Ny, Nx))
+    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
 class ConstrainedLapOperator:
-    def __init__(self, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
-        self.Lap = Lap
+    def __init__(self, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
+        self.dLap = dLap
         self.delta_layer = delta_layer
         self.Nx = Nx
         self.Ny = Ny
@@ -252,12 +322,14 @@ class ConstrainedLapOperator:
         self.ctxt_prev = ctxt_prev.copy()  # Make a copy to avoid reference issues
     
     def matvec(self, xx):
-        return Constrained_Lap(xx, self.ctxt_prev, self.Lap, self.delta_layer, 
+        return Constrained_Lap(xx, self.ctxt_prev, self.dLap, self.delta_layer, 
                               self.Nx, self.Ny, self.Nib, self.Sop, self.Jop, 
                               self.Sop_prime, self.Jop_prime)
 
+dLap = cholesky(Lap)
+
 # Create the operator once
-lap_operator = ConstrainedLapOperator(Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
+lap_operator = ConstrainedLapOperator(dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
 
 # Load initial conditions from .mat file
 ld = loadmat('BC_run_N_300_r0p25.mat')
@@ -284,19 +356,25 @@ theta_ld = ld['theta'].flatten()
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+ldData = loadmat('data.mat')
+Phi_init = ldData['Phi_init']
+N_p_init = ldData['N_p_init']
+N_m_init = ldData['N_m_init']
+
+#Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+
 #N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 #N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 
-N_p_init_f = RegularGridInterpolator((x_ld, y_ld), N_p_ld, 
-                                    method=METHOD, bounds_error=False, fill_value=None)
-N_m_init_f = RegularGridInterpolator((x_ld, y_ld), N_m_ld, 
-                                    method=METHOD, bounds_error=False, fill_value=None)
+#N_p_init_f = RegularGridInterpolator((x_ld, y_ld), N_p_ld, 
+#                                    method=METHOD, bounds_error=False, fill_value=None)
+#N_m_init_f = RegularGridInterpolator((x_ld, y_ld), N_m_ld, 
+#                                    method=METHOD, bounds_error=False, fill_value=None)
 
-points_new = np.column_stack([Xint.flatten(order='F'), Yint.flatten(order='F')])
+#points_new = np.column_stack([Xint.flatten(order='F'), Yint.flatten(order='F')])
 
-N_p_init = N_p_init_f(points_new).reshape(Ny, Nx)
-N_m_init = N_m_init_f(points_new).reshape(Ny, Nx)
+#N_p_init = N_p_init_f(points_new).reshape(Ny, Nx)
+#N_m_init = N_m_init_f(points_new).reshape(Ny, Nx)
 
 # Interpolate boundary quantities
 Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
@@ -313,8 +391,8 @@ ctxt = np.concatenate([
 ])
 
 # Define operators for iteration
-AxOp_prev = lambda ctxt, ctxt_prev: Constrained_Lap(ctxt, ctxt_prev, Lap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
-b_Op = lambda ctxt: Build_RHS(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
+AxOp_prev = lambda ctxt, ctxt_prev: Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
+b_Op = lambda ctxt: Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
 
 # Check initial residual
 RHS = b_Op(ctxt)
@@ -327,7 +405,7 @@ m = 50
 DU = np.full((len(RHS), m), np.nan)
 DG = np.full((len(RHS), m), np.nan)
 
-tol = 1e-5
+tol = 1e-4
 u_n = ctxt.copy()
 RHS = b_Op(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, ctxt))
@@ -335,7 +413,7 @@ AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, ctxt
 # Initial GMRES solve
 lap_operator.set_context(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-G_u_n, info = gmres(AxOp, RHS, atol=tol, maxiter=1000, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
 

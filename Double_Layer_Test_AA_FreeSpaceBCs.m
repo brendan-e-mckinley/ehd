@@ -127,6 +127,7 @@ N_m_init_f = griddedInterpolant(ld.Xint',ld.Yint',N_m_ld',METHOD,EMETHOD);
 Phi_init = Phi_init_f(Xint',Yint')';
 N_p_init = N_p_init_f(Xint',Yint')';
 N_m_init = N_m_init_f(Xint',Yint')';
+
 % theta_ld = atan2(ld.yib,ld.xib);
 % theta_ld = theta_ld .* (theta_ld >= 0) + (2 * pi + theta_ld) .* (theta_ld < 0);
 theta_ld = ld.theta;
@@ -230,6 +231,14 @@ function A_x_Ctx = Constrained_Lap(ctxt, ctxt_prev, Lap, dLap, delta_layer, Nx, 
     SQ_m = Sop_prime(Q_m);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     dl2 = delta_layer^2;
+
+    check1 = dl2*Phi + dLap\(0.5*N_p - 0.5*N_m + SQ(:));
+    check2 =  N_p + dLap\SQ_p(:); %N_p_prev.*(Lap*Phi) +
+    check3 = N_m + dLap\SQ_m(:); %-N_m_prev.*(Lap*Phi) + 
+    check4 = Jop_prime(reshape(Phi,Ny,Nx));
+    check5 = Jop_prime(reshape(N_p,Ny,Nx));
+    check6 = Jop_prime(reshape(N_m,Ny,Nx));
+
     A_x_Ctx(1:sz) = dl2*Phi + dLap\(0.5*N_p - 0.5*N_m + SQ(:));
     A_x_Ctx(sz+1:2*sz) =  N_p + dLap\SQ_p(:); %N_p_prev.*(Lap*Phi) +
     A_x_Ctx(2*sz+1:3*sz) = N_m + dLap\SQ_m(:); %-N_m_prev.*(Lap*Phi) + 
@@ -257,6 +266,15 @@ function b_Ctx = Build_RHS(ctxt, ctxt_BCs, Lap, dLap, Grad_dot_Grad, delta_layer
     Q_m_BC = ctxt_BCs((q_i+2*Nib+1):(q_i+3*Nib));
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     dl2 = delta_layer^2;
+
+    check1 = dLap\(-dl2*Phi_BC(:));
+    % N_BCs are = 1 so no need to include them in the following lines
+    check2 = dLap\(-N_p(:).*(Lap*Phi(:)+Phi_BC(:)) - N_p_BC(:) - Grad_dot_Grad(Phi,N_p));
+    check3 = dLap\(N_m(:).*(Lap*Phi(:)+Phi_BC(:)) - N_m_BC(:) + Grad_dot_Grad(Phi,N_m));
+    check4 = Q_BC;
+    check5 = Q_p_BC - Jop(reshape(N_p,Ny,Nx)).*Jop_prime(reshape(Phi,Ny,Nx));
+    check6 = Q_m_BC + Jop(reshape(N_m,Ny,Nx)).*Jop_prime(reshape(Phi,Ny,Nx));
+
     b_Ctx(1:sz) = dLap\(-dl2*Phi_BC(:));
     % N_BCs are = 1 so no need to include them in the following lines
     b_Ctx(sz+1:2*sz) = dLap\(-N_p(:).*(Lap*Phi(:)+Phi_BC(:)) - N_p_BC(:) - Grad_dot_Grad(Phi,N_p));
@@ -304,8 +322,11 @@ function [Jphi] = interpPhi_prime(X,Y,xq,yq,n_x,n_y,Phi,delta_r,cut)
     for k = 1:Nq
         Rk = sqrt((X-xq(k)).^2 + (Y-yq(k)).^2);
         mask = (Rk <= cut);
+        [row col] = find(mask);
         n_dot_rhat = (n_x(k)*(X(mask)-xq(k)) + n_y(k)*(Y(mask)-yq(k)))./Rk(mask);
-        Jphi(k) = dx*dy*sum(sum(Phi(mask).*n_dot_rhat.*delta_r(Rk(mask))));
+        Phi_masked = Phi(mask);
+        Rk_masked = Rk(mask);
+        Jphi(k) = dx*dy*sum(Phi_masked.*n_dot_rhat.*delta_r(Rk_masked));
     end
 end
 
