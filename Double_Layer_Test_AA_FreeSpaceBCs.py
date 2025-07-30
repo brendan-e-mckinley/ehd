@@ -104,32 +104,18 @@ def delta_r(r):
 
 cut = 6 * 1.2 * dx
 
-# Define operators
 
 @jit(nopython=True)
 def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
-
-    X_flat = X.ravel()
-    Y_flat = Y.ravel()
-    Sq_flat = Sq.ravel()
-
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-
-        mask_flat = mask.ravel()
-        Rk_flat = Rk.ravel()
-
-        X_masked = X_flat[mask_flat]
-        Y_masked = Y_flat[mask_flat]
-        Rk_masked = Rk_flat[mask_flat]
-
-        n_dot_rhat = (n_x[k]*(X_masked - xq[k]) + n_y[k]*(Y_masked - yq[k])) / Rk_masked
-        Sq_flat[mask_flat] += q[k] * n_dot_rhat * delta_r(Rk_masked)
-
-    Sq = Sq_flat.reshape(X.shape)
+        n_dot_rhat = np.where(mask, 
+                             (n_x[k]*(X - xq[k]) + n_y[k]*(Y - yq[k])) / Rk,
+                             0.0)
+        Sq += q[k] * n_dot_rhat * delta_r(Rk) * mask
     return Sq
 
 @jit(nopython=True)
@@ -138,42 +124,33 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     Nq = len(xq)
     dx_loc = X[0, 1] - X[0, 0]
     dy_loc = Y[1, 0] - Y[0, 0]
+    
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
+
+        n_dot_rhat = np.where(mask,
+                             (n_x[k]*(X - xq[k]) + n_y[k]*(Y - yq[k])) / Rk,
+                             0.0)
         
-        mask_flat = mask.ravel()
-        X_flat = X.ravel()
-        Y_flat = Y.ravel()
-        Phi_flat = Phi.ravel()
-        Rk_flat = Rk.ravel()
+        contribution = Phi * n_dot_rhat * delta_r(Rk) * mask
         
-        X_masked = X_flat[mask_flat]
-        Y_masked = Y_flat[mask_flat]
-        Phi_masked = Phi_flat[mask_flat]
-        Rk_masked = Rk_flat[mask_flat]
-        
-        n_dot_rhat = (n_x[k]*(X_masked - xq[k]) + n_y[k]*(Y_masked - yq[k])) / Rk_masked
-        Jphi[k] = dx_loc * dy_loc * np.sum(Phi_masked * n_dot_rhat * delta_r(Rk_masked))
+        Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+    
     return Jphi
 
 @jit(nopython=True)
 def spreadQ(X, Y, xq, yq, q, delta, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
-    Sq_flat = Sq.ravel()
-
+    
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-
-        mask_flat = mask.ravel()
-        Rk_flat = Rk.ravel()
-
-        Rk_masked = Rk_flat[mask_flat]
-        Sq_flat[mask_flat] += q[k] * delta(Rk_masked)
-
-    Sq = Sq_flat.reshape(X.shape)
+        
+        contribution = q[k] * delta(Rk) * mask
+        Sq += contribution
+    
     return Sq
 
 @jit(nopython=True)
@@ -182,18 +159,14 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     Nq = len(xq)
     dx_loc = X[0, 1] - X[0, 0]
     dy_loc = Y[1, 0] - Y[0, 0]
+    
     for k in range(Nq):
         Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
         mask = (Rk <= cut)
-
-        mask_flat = mask.ravel()
-        Phi_flat = Phi.ravel()
-        Rk_flat = Rk.ravel()
-
-        Phi_masked = Phi_flat[mask_flat]
-        Rk_masked = Rk_flat[mask_flat]
-
-        Jphi[k] = dx_loc * dy_loc * np.sum(Phi_masked * delta(Rk_masked))
+        
+        contribution = Phi * delta(Rk) * mask
+        Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+    
     return Jphi
 
 # Define lambda functions for operators
@@ -205,25 +178,35 @@ Jop = lambda P: interpPhi(Xint, Yint, xib, yib, P, delta, cut)
 Phi_BC = Phi_exact(X, Y)
 N_pm_BC = Npm_exact(X, Y)
 
+@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
-    # Phi_x * N_x + Phi_y * N_y
-    Phi = Phi.reshape(Ny, Nx).T
-    N_pm = N_pm.reshape(Ny, Nx).T
+    Phi = np.ascontiguousarray(Phi.reshape(Ny, Nx).T)
+    N_pm = np.ascontiguousarray(N_pm.reshape(Ny, Nx).T)
     
-    Phi_BC_y = np.vstack([Phi_BC[0, 1:-1].reshape(1, -1), Phi, Phi_BC[-1, 1:-1].reshape(1, -1)])
+    # Fix for y-direction: use copy() to ensure contiguity
+    top_row_phi = np.copy(Phi_BC[0, 1:-1]).reshape(1, -1)
+    bottom_row_phi = np.copy(Phi_BC[-1, 1:-1]).reshape(1, -1)
+    Phi_BC_y = np.vstack((top_row_phi, Phi, bottom_row_phi))
     Phi_y = (0.5/dy) * (Phi_BC_y[2:, :] - Phi_BC_y[:-2, :])
     
-    N_pm_BC_y = np.vstack([N_pm_BC[0, 1:-1].reshape(1, -1), N_pm, N_pm_BC[-1, 1:-1].reshape(1, -1)])
+    top_row_npm = np.copy(N_pm_BC[0, 1:-1]).reshape(1, -1)
+    bottom_row_npm = np.copy(N_pm_BC[-1, 1:-1]).reshape(1, -1)
+    N_pm_BC_y = np.vstack((top_row_npm, N_pm, bottom_row_npm))
     N_pm_y = (0.5/dy) * (N_pm_BC_y[2:, :] - N_pm_BC_y[:-2, :])
     
-    Phi_BC_x = np.hstack([Phi_BC[1:-1, 0].reshape(-1, 1), Phi, Phi_BC[1:-1, -1].reshape(-1, 1)])
+    # Fix for x-direction: use copy() to ensure contiguity
+    left_col_phi = np.copy(Phi_BC[1:-1, 0]).reshape(-1, 1)
+    right_col_phi = np.copy(Phi_BC[1:-1, -1]).reshape(-1, 1)
+    Phi_BC_x = np.hstack((left_col_phi, Phi, right_col_phi))
     Phi_x = (0.5/dx) * (Phi_BC_x[:, 2:] - Phi_BC_x[:, :-2])
     
-    N_pm_BC_x = np.hstack([N_pm_BC[1:-1, 0].reshape(-1, 1), N_pm, N_pm_BC[1:-1, -1].reshape(-1, 1)])
+    left_col_npm = np.copy(N_pm_BC[1:-1, 0]).reshape(-1, 1)
+    right_col_npm = np.copy(N_pm_BC[1:-1, -1]).reshape(-1, 1)
+    N_pm_BC_x = np.hstack((left_col_npm, N_pm, right_col_npm))
     N_pm_x = (0.5/dx) * (N_pm_BC_x[:, 2:] - N_pm_BC_x[:, :-2])
     
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
-    return G_d_G.flatten(order='F')
+    return G_d_G.flatten()
 
 G_d_G = lambda Phi, N_pm: Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
@@ -288,6 +271,8 @@ def Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
     
     dl2 = delta_layer**2
+    
+    computed_lap = Lap @ Phi + Phi_BC
 
     #check1 = spsolve(Lap, -dl2 * Phi_BC)
     #check2 = spsolve(Lap, -N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
@@ -297,8 +282,8 @@ def Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop
     #check6 = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     b_Ctx[:sz] =  dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  dLap.solve_A(-N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
-    b_Ctx[2*sz:3*sz] =  dLap.solve_A(N_m * (Lap @ Phi + Phi_BC) - N_m_BC + G_d_G(Phi, N_m))
+    b_Ctx[sz:2*sz] =  dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
+    b_Ctx[2*sz:3*sz] =  dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -467,20 +452,22 @@ for its in range(100000):
     
     print(f'Iteration {its}: residual = {err_curr}')
     
-    if err_curr < 1e-4:
-        print('Converged!')
-        break
+    #if err_curr < 1e-4:
+    #    print('Converged!')
+    #    break
     
     # Plot current solution
-    if its % 10 == 0:  # Plot every 10 iterations
-        plt.clf()
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
-        ax.set_xlabel('x')
-        ax.set_ylabel('y')
-        ax.set_title(r'$N_+$')
-        plt.pause(0.01)
+    #if its % 10 == 0:  # Plot every 10 iterations
+    #    plt.clf()
+    #    fig = plt.figure(figsize=(10, 8))
+    #    ax = fig.add_subplot(111, projection='3d')
+    #    surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
+    #    ax.set_xlabel('x')
+    #    ax.set_ylabel('y')
+    #    ax.set_title(r'$N_+$')
+    #    plt.pause(0.01)
+
+    break
 
 ctxt_final = u_next.copy()
 
