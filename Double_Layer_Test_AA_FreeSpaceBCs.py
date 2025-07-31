@@ -90,22 +90,22 @@ n_x = np.cos(theta)
 n_y = np.sin(theta)
 
 # Delta functions
-@jit(nopython=True)
+#@jit(nopython=True)
 def delta_a(r, a):
     return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def delta(r):
     return delta_a(r, 1.2*dx)
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def delta_r(r):
     return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
 
 cut = 6 * 1.2 * dx
 
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
@@ -118,7 +118,7 @@ def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
         Sq += q[k] * n_dot_rhat * delta_r(Rk) * mask
     return Sq
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     Jphi = np.zeros_like(xq)
     Nq = len(xq)
@@ -139,7 +139,7 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     
     return Jphi
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def spreadQ(X, Y, xq, yq, q, delta, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
@@ -153,7 +153,7 @@ def spreadQ(X, Y, xq, yq, q, delta, cut):
     
     return Sq
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     Jphi = np.zeros_like(xq)
     Nq = len(xq)
@@ -169,16 +169,31 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     
     return Jphi
 
-# Define lambda functions for operators
-Sop_prime = lambda q: spreadQ_prime(Xint, Yint, xib, yib, n_x, n_y, q, delta_r, cut)
-Jop_prime = lambda P: interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
-Sop = lambda q: spreadQ(Xint, Yint, xib, yib, q, delta, cut)
-Jop = lambda P: interpPhi(Xint, Yint, xib, yib, P, delta, cut)
+def Sop_prime(q):
+    return spreadQ_prime(Xint, Yint, xib, yib, n_x, n_y, q, delta_r, cut)
+
+def Jop_prime(P):
+    return interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
+
+def Sop(q):
+    return spreadQ(Xint, Yint, xib, yib, q, delta, cut)
+
+def Jop(P):
+    return interpPhi(Xint, Yint, xib, yib, P, delta, cut)
+
+def G_d_G(Phi, N_pm):
+    return Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
+
+def AxOp_prev(ctxt, ctxt_prev):
+    return Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
+
+def b_Op(ctxt):
+    return Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
 
 Phi_BC = Phi_exact(X, Y)
 N_pm_BC = Npm_exact(X, Y)
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     Phi = np.ascontiguousarray(Phi.reshape(Ny, Nx).T)
     N_pm = np.ascontiguousarray(N_pm.reshape(Ny, Nx).T)
@@ -207,8 +222,6 @@ def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
     return G_d_G.flatten()
-
-G_d_G = lambda Phi, N_pm: Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
 # Boundary conditions context
 ctxt_BCs = np.concatenate([
@@ -375,10 +388,6 @@ ctxt = np.concatenate([
     Q_m_init
 ])
 
-# Define operators for iteration
-AxOp_prev = lambda ctxt, ctxt_prev: Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
-b_Op = lambda ctxt: Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
-
 # Check initial residual
 RHS = b_Op(ctxt)
 err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
@@ -393,7 +402,9 @@ DG = np.full((len(RHS), m), np.nan)
 tol = 1e-4
 u_n = ctxt.copy()
 RHS = b_Op(ctxt)
-AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lambda xx: AxOp_prev(xx, ctxt))
+def AxOp_matvec(xx):
+    return AxOp_prev(xx, ctxt)
+AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 
 # Initial GMRES solve
 lap_operator.set_context(ctxt)
