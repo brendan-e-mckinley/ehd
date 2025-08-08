@@ -109,34 +109,72 @@ cut = 6 * 1.2 * dx
 def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
+    
+    dx = X[0, 1] - X[0, 0]
+    dy = Y[1, 0] - Y[0, 0]
+    Nx = X.shape[1]
+    Ny = Y.shape[0]
+
     for k in range(Nq):
-        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
+        xk = xq[k]
+        yk = yq[k]
+        
+        i_min = max(int((xk - cut - X[0, 0]) / dx), 0)
+        i_max = min(int((xk + cut - X[0, 0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0, 0]) / dy), 0)
+        j_max = min(int((yk + cut - Y[0, 0]) / dy) + 1, Ny)
+        
+        X_local = X[j_min:j_max, i_min:i_max]
+        Y_local = Y[j_min:j_max, i_min:i_max]
+        
+        Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2)
         mask = (Rk <= cut)
-        n_dot_rhat = np.where(mask, 
-                             (n_x[k]*(X - xq[k]) + n_y[k]*(Y - yq[k])) / Rk,
-                             0.0)
-        Sq += q[k] * n_dot_rhat * delta_r(Rk) * mask
+        
+        n_dot_rhat = np.where(mask,
+            (n_x[k] * (X_local - xk) + n_y[k] * (Y_local - yk)) / Rk,
+            0.0
+        )
+        
+        contribution = q[k] * n_dot_rhat * delta_r(Rk) * mask
+        Sq[j_min:j_max, i_min:i_max] += contribution
+    
     return Sq
 
 #@jit(nopython=True)
 def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     Jphi = np.zeros_like(xq)
-    Nq = len(xq)
     dx_loc = X[0, 1] - X[0, 0]
     dy_loc = Y[1, 0] - Y[0, 0]
-    
-    for k in range(Nq):
-        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
-        mask = (Rk <= cut)
+    Ny, Nx = X.shape
 
-        n_dot_rhat = np.where(mask,
-                             (n_x[k]*(X - xq[k]) + n_y[k]*(Y - yq[k])) / Rk,
-                             0.0)
-        
-        contribution = Phi * n_dot_rhat * delta_r(Rk) * mask
-        
+    for k in range(len(xq)):
+        xk, yk = xq[k], yq[k]
+        nxk, nyk = n_x[k], n_y[k]
+
+        # Find the grid region affected by this point
+        i_min = max(int((xk - cut - X[0,0]) / dx_loc), 0)
+        i_max = min(int((xk + cut - X[0,0]) / dx_loc) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0,0]) / dy_loc), 0)
+        j_max = min(int((yk + cut - Y[0,0]) / dy_loc) + 1, Ny)
+
+        # Extract local patch
+        X_local = X[j_min:j_max, i_min:i_max]
+        Y_local = Y[j_min:j_max, i_min:i_max]
+        Phi_local = Phi[j_min:j_max, i_min:i_max]
+
+        dx = X_local - xk
+        dy = Y_local - yk
+        R = np.sqrt(dx**2 + dy**2)
+        mask = R <= cut
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            n_dot_rhat = np.where(mask, (nxk * dx + nyk * dy) / R, 0.0)
+
+        delta_vals = delta_r(R)
+        contribution = Phi_local * n_dot_rhat * delta_vals * mask
+
         Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
-    
+
     return Jphi
 
 #@jit(nopython=True)
@@ -144,29 +182,65 @@ def spreadQ(X, Y, xq, yq, q, delta, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
     
+    dx = X[0, 1] - X[0, 0]
+    dy = Y[1, 0] - Y[0, 0]
+    Nx = X.shape[1]
+    Ny = Y.shape[0]
+
     for k in range(Nq):
-        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
+        xk = xq[k]
+        yk = yq[k]
+        
+        # Compute local window indices
+        i_min = max(int((xk - cut - X[0, 0]) / dx), 0)
+        i_max = min(int((xk + cut - X[0, 0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0, 0]) / dy), 0)
+        j_max = min(int((yk + cut - Y[0, 0]) / dy) + 1, Ny)
+        
+        # Extract local window
+        X_local = X[j_min:j_max, i_min:i_max]
+        Y_local = Y[j_min:j_max, i_min:i_max]
+        
+        Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2)
         mask = (Rk <= cut)
         
         contribution = q[k] * delta(Rk) * mask
-        Sq += contribution
+        
+        Sq[j_min:j_max, i_min:i_max] += contribution
     
     return Sq
 
 #@jit(nopython=True)
 def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     Jphi = np.zeros_like(xq)
-    Nq = len(xq)
     dx_loc = X[0, 1] - X[0, 0]
     dy_loc = Y[1, 0] - Y[0, 0]
     
-    for k in range(Nq):
-        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
-        mask = (Rk <= cut)
-        
-        contribution = Phi * delta(Rk) * mask
+    for k in range(len(xq)):
+        xk, yk = xq[k], yq[k]
+        nxk, nyk = n_x[k], n_y[k]
+
+        # Find the grid region affected by this point
+        i_min = max(int((xk - cut - X[0,0]) / dx_loc), 0)
+        i_max = min(int((xk + cut - X[0,0]) / dx_loc) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0,0]) / dy_loc), 0)
+        j_max = min(int((yk + cut - Y[0,0]) / dy_loc) + 1, Ny)
+
+        # Extract local patch
+        X_local = X[j_min:j_max, i_min:i_max]
+        Y_local = Y[j_min:j_max, i_min:i_max]
+        Phi_local = Phi[j_min:j_max, i_min:i_max]
+
+        dx = X_local - xk
+        dy = Y_local - yk
+        R = np.sqrt(dx**2 + dy**2)
+        mask = R <= cut
+
+        delta_vals = delta(R)
+        contribution = Phi_local * delta_vals * mask
+
         Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
-    
+
     return Jphi
 
 def Sop_prime(q):
@@ -193,35 +267,25 @@ def b_Op(ctxt):
 Phi_BC = Phi_exact(X, Y)
 N_pm_BC = Npm_exact(X, Y)
 
-#@jit(nopython=True)
+##@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
-    Phi = np.ascontiguousarray(Phi.reshape(Ny, Nx).T)
-    N_pm = np.ascontiguousarray(N_pm.reshape(Ny, Nx).T)
-    
-    # Fix for y-direction: use copy() to ensure contiguity
-    top_row_phi = np.copy(Phi_BC[0, 1:-1]).reshape(1, -1)
-    bottom_row_phi = np.copy(Phi_BC[-1, 1:-1]).reshape(1, -1)
-    Phi_BC_y = np.vstack((top_row_phi, Phi, bottom_row_phi))
+    Phi = Phi.reshape(Ny, Nx).T
+    N_pm = N_pm.reshape(Ny, Nx).T
+
+    Phi_BC_y = np.vstack([Phi_BC[0, 1:-1].reshape(1, -1), Phi, Phi_BC[-1, 1:-1].reshape(1, -1)])
     Phi_y = (0.5/dy) * (Phi_BC_y[2:, :] - Phi_BC_y[:-2, :])
-    
-    top_row_npm = np.copy(N_pm_BC[0, 1:-1]).reshape(1, -1)
-    bottom_row_npm = np.copy(N_pm_BC[-1, 1:-1]).reshape(1, -1)
-    N_pm_BC_y = np.vstack((top_row_npm, N_pm, bottom_row_npm))
+
+    N_pm_BC_y = np.vstack([N_pm_BC[0, 1:-1].reshape(1, -1), N_pm, N_pm_BC[-1, 1:-1].reshape(1, -1)])
     N_pm_y = (0.5/dy) * (N_pm_BC_y[2:, :] - N_pm_BC_y[:-2, :])
-    
-    # Fix for x-direction: use copy() to ensure contiguity
-    left_col_phi = np.copy(Phi_BC[1:-1, 0]).reshape(-1, 1)
-    right_col_phi = np.copy(Phi_BC[1:-1, -1]).reshape(-1, 1)
-    Phi_BC_x = np.hstack((left_col_phi, Phi, right_col_phi))
+
+    Phi_BC_x = np.hstack([Phi_BC[1:-1, 0].reshape(-1, 1), Phi, Phi_BC[1:-1, -1].reshape(-1, 1)])
     Phi_x = (0.5/dx) * (Phi_BC_x[:, 2:] - Phi_BC_x[:, :-2])
-    
-    left_col_npm = np.copy(N_pm_BC[1:-1, 0]).reshape(-1, 1)
-    right_col_npm = np.copy(N_pm_BC[1:-1, -1]).reshape(-1, 1)
-    N_pm_BC_x = np.hstack((left_col_npm, N_pm, right_col_npm))
+
+    N_pm_BC_x = np.hstack([N_pm_BC[1:-1, 0].reshape(-1, 1), N_pm, N_pm_BC[1:-1, -1].reshape(-1, 1)])
     N_pm_x = (0.5/dx) * (N_pm_BC_x[:, 2:] - N_pm_BC_x[:, :-2])
-    
+
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
-    return G_d_G.flatten()
+    return G_d_G.flatten(order='F')
 
 # Boundary conditions context
 ctxt_BCs = np.concatenate([
@@ -399,7 +463,7 @@ m = 50
 DU = np.full((len(RHS), m), np.nan)
 DG = np.full((len(RHS), m), np.nan)
 
-tol = 1e-4
+tol = 1e-5
 u_n = ctxt.copy()
 RHS = b_Op(ctxt)
 def AxOp_matvec(xx):
@@ -409,7 +473,7 @@ AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 # Initial GMRES solve
 lap_operator.set_context(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=100, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
 
@@ -422,7 +486,7 @@ for its in range(100000):
     RHS = b_Op(u_next)
     lap_operator.set_context(u_next)  # Update the context
     AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-    G_u_next, info = gmres(AxOp, RHS, atol=tol, maxiter=1000, x0=u_next)
+    G_u_next, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=100, x0=u_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
     
     if info != 0:
         print(f'GMRES warning at iteration {its}: convergence info = {info}')
@@ -463,9 +527,9 @@ for its in range(100000):
     
     print(f'Iteration {its}: residual = {err_curr}')
     
-    #if err_curr < 1e-4:
-    #    print('Converged!')
-    #    break
+    if err_curr < 1e-4:
+        print('Converged!')
+        break
     
     # Plot current solution
     #if its % 10 == 0:  # Plot every 10 iterations
@@ -478,7 +542,7 @@ for its in range(100000):
     #    ax.set_title(r'$N_+$')
     #    plt.pause(0.01)
 
-    break
+    #break
 
 ctxt_final = u_next.copy()
 
