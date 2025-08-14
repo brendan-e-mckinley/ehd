@@ -216,7 +216,9 @@ function A_x_Ctx = Constrained_Lap(ctxt, ctxt_prev, Lap, dLap, delta_layer, Nx, 
     sz = Nx*Ny;
     Phi = ctxt(1:sz);
     N_p = ctxt(sz+1:2*sz);
+    save('np.mat', 'N_p');
     N_m = ctxt(2*sz+1:3*sz);
+    save('nm.mat', 'N_m');
     q_i = 3*sz;
     Q = ctxt((q_i+1):(q_i+Nib));
     Q_p = ctxt((q_i+Nib+1):(q_i+2*Nib));
@@ -227,14 +229,25 @@ function A_x_Ctx = Constrained_Lap(ctxt, ctxt_prev, Lap, dLap, delta_layer, Nx, 
     N_m_prev = ctxt_prev(2*sz+1:3*sz);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     SQ = Sop_prime(Q);
+    save('sq.mat', 'SQ');
     SQ_p = Sop_prime(Q_p);
+    save('sq_p.mat', 'SQ_p');
     SQ_m = Sop_prime(Q_m);
+    save('sq_m.mat', 'SQ_m');
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     dl2 = delta_layer^2;
 
-    check1 = dl2*Phi + dLap\(0.5*N_p - 0.5*N_m + SQ(:));
+    check1Solve = 0.5*N_p - 0.5*N_m + SQ(:);
+    dLapSolve = dLap\(check1Solve);
+    save('check1Solve.mat', 'check1Solve')
+    save('dLapSolve.mat', 'dLapSolve')
+    save('phi.mat', 'Phi')
+    check1 = dl2*Phi + dLap\(check1Solve);
+    save('check1.mat', 'check1');
     check2 =  N_p + dLap\SQ_p(:); %N_p_prev.*(Lap*Phi) +
+    save('check2.mat', 'check2');
     check3 = N_m + dLap\SQ_m(:); %-N_m_prev.*(Lap*Phi) + 
+    save('check3.mat', 'check3');
     check4 = Jop_prime(reshape(Phi,Ny,Nx));
     check5 = Jop_prime(reshape(N_p,Ny,Nx));
     check6 = Jop_prime(reshape(N_m,Ny,Nx));

@@ -40,6 +40,7 @@ D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
 I_nx = eye(Nx)
 I_ny = eye(Ny)
 Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
+dLap = cholesky(Lap)
 
 # Parameters
 beta_BC = 7.94
@@ -82,7 +83,7 @@ plt.show()
 # Make immersed boundary mats
 rad = 0.25
 dth = dx / rad
-theta = np.arange(0, 2*np.pi, dth)
+theta = np.arange(0, 2*np.pi - dth, dth)
 Nib = len(theta)
 xib = rad * np.cos(theta)
 yib = rad * np.sin(theta)
@@ -109,7 +110,7 @@ cut = 6 * 1.2 * dx
 def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
     Sq = np.zeros_like(X)
     Nq = len(q)
-    
+
     dx = X[0, 1] - X[0, 0]
     dy = Y[1, 0] - Y[0, 0]
     Nx = X.shape[1]
@@ -128,6 +129,18 @@ def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
         Y_local = Y[j_min:j_max, i_min:i_max]
         
         Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2)
+        # mask_local = (Rk <= cut)
+
+        # Rk_full = np.ones(Sq.shape)
+        # Rk_full[j_min:j_max, i_min:i_max] = Rk
+        
+        # mask = np.full(Sq.shape, False, dtype=bool)
+        # mask[j_min:j_max, i_min:i_max] = mask_local
+
+        # n_dot_rhat = (n_x[k] * (X - xk) + n_y[k] * (Y - yk)) / Rk_full
+        
+        # contribution = q[k] * n_dot_rhat * delta_r(Rk_full) * mask
+        # Sq += contribution
         mask = (Rk <= cut)
         
         n_dot_rhat = np.where(mask,
@@ -303,28 +316,41 @@ def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, S
     sz = Nx * Ny
     Phi = ctxt[:sz]
     N_p = ctxt[sz:2*sz]
+    np.save("np.npy", N_p.reshape(-1,1))
     N_m = ctxt[2*sz:3*sz]
+    np.save("nm.npy", N_m.reshape(-1,1))
     q_i = 3 * sz
     Q = ctxt[q_i:q_i+Nib]
     Q_p = ctxt[q_i+Nib:q_i+2*Nib]
     Q_m = ctxt[q_i+2*Nib:q_i+3*Nib]
     
     SQ = Sop_prime(Q)
+    np.save("sq.npy", SQ)
     SQ_p = Sop_prime(Q_p)
+    np.save("sq_p.npy", SQ_p)
     SQ_m = Sop_prime(Q_m)
+    np.save("sq_m.npy", SQ_m)
     
     dl2 = delta_layer**2
 
-    check1 = dl2 * Phi + dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
-    check2 = N_p + dLap.solve_A(SQ_p.flatten(order='F'))
-    check3 = N_m + dLap.solve_A(SQ_m.flatten(order='F'))
+    check1Solve = 0.5*N_p - 0.5*N_m + SQ.flatten(order='F')
+    dLapSolve = dLap.solve_A(check1Solve)
+    np.save("check1Solve.npy", check1Solve.reshape(-1, 1))
+    np.save("dLapSolve.npy", dLapSolve.reshape(-1, 1))
+    np.save("phi.npy", Phi.reshape(-1, 1))
+    check1 = dl2 * Phi - dLap.solve_A(check1Solve)
+    np.save("check1.npy", check1.reshape(-1, 1))
+    check2 = N_p - dLap.solve_A(SQ_p.flatten(order='F'))
+    np.save("check2.npy", check2.reshape(-1, 1))
+    check3 = N_m - dLap.solve_A(SQ_m.flatten(order='F'))
+    np.save("check3.npy", check3.reshape(-1, 1))
     check4 = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     check5 = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
     check6 = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
 
-    A_x_Ctx[:sz] = dl2 * Phi + dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
-    A_x_Ctx[sz:2*sz] = N_p +  dLap.solve_A(SQ_p.flatten(order='F'))
-    A_x_Ctx[2*sz:3*sz] = N_m + dLap.solve_A(SQ_m.flatten(order='F'))
+    A_x_Ctx[:sz] = dl2 * Phi - dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
+    A_x_Ctx[sz:2*sz] = N_p - dLap.solve_A(SQ_p.flatten(order='F'))
+    A_x_Ctx[2*sz:3*sz] = N_m - dLap.solve_A(SQ_m.flatten(order='F'))
     A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
@@ -360,7 +386,6 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib
     #check6 = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     check1 =  -dLap.solve_A(-dl2 * Phi_BC)
-    # check2 and check3 are the problems right now 
     check2 =  -dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
     check3 =  -dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
     check4 = Q_BC
@@ -396,8 +421,6 @@ class ConstrainedLapOperator:
         return Constrained_Lap(xx, self.ctxt_prev, self.dLap, self.delta_layer, 
                               self.Nx, self.Ny, self.Nib, self.Sop, self.Jop, 
                               self.Sop_prime, self.Jop_prime)
-
-dLap = cholesky(Lap)
 
 # Create the operator once
 lap_operator = ConstrainedLapOperator(dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
@@ -482,7 +505,7 @@ AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 # Initial GMRES solve
 lap_operator.set_context(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=100, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=300, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
 
@@ -495,7 +518,7 @@ for its in range(100000):
     RHS = b_Op(u_next)
     lap_operator.set_context(u_next)  # Update the context
     AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-    G_u_next, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=100, x0=u_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+    G_u_next, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=300, x0=u_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
     
     if info != 0:
         print(f'GMRES warning at iteration {its}: convergence info = {info}')
