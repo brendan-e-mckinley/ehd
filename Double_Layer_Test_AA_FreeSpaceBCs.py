@@ -262,7 +262,7 @@ def AxOp_prev(ctxt, ctxt_prev):
     return Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
 
 def b_Op(ctxt):
-    return Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
+    return Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime)
 
 Phi_BC = Phi_exact(X, Y)
 N_pm_BC = Npm_exact(X, Y)
@@ -315,12 +315,12 @@ def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, S
     
     dl2 = delta_layer**2
 
-    #check1 = dl2 * Phi + spsolve(Lap, 0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
-    #check2 = N_p + spsolve(Lap, SQ_p.flatten(order='F'))
-    #check3 = N_m + spsolve(Lap, SQ_m.flatten(order='F'))
-    #check4 = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
-    #check5 = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
-    #check6 = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
+    check1 = dl2 * Phi + dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
+    check2 = N_p + dLap.solve_A(SQ_p.flatten(order='F'))
+    check3 = N_m + dLap.solve_A(SQ_m.flatten(order='F'))
+    check4 = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    check5 = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
+    check6 = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
 
     A_x_Ctx[:sz] = dl2 * Phi + dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
     A_x_Ctx[sz:2*sz] = N_p +  dLap.solve_A(SQ_p.flatten(order='F'))
@@ -331,7 +331,7 @@ def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop, Jop, S
     
     return A_x_Ctx
 
-def Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
+def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop, Jop, Sop_prime, Jop_prime):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -349,7 +349,8 @@ def Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop
     
     dl2 = delta_layer**2
     
-    computed_lap = Lap @ Phi + Phi_BC
+    computed_lap = (-Lap) @ Phi
+    computed_lap = computed_lap + Phi_BC
 
     #check1 = spsolve(Lap, -dl2 * Phi_BC)
     #check2 = spsolve(Lap, -N_p * (Lap @ Phi + Phi_BC) - N_p_BC - G_d_G(Phi, N_p))
@@ -358,9 +359,17 @@ def Build_RHS(ctxt, ctxt_BCs, dLap, G_d_G, delta_layer, dx, dy, Nx, Ny, Nib, Sop
     #check5 = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     #check6 = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
-    b_Ctx[:sz] =  dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
-    b_Ctx[2*sz:3*sz] =  dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
+    check1 =  -dLap.solve_A(-dl2 * Phi_BC)
+    # check2 and check3 are the problems right now 
+    check2 =  -dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
+    check3 =  -dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
+    check4 = Q_BC
+    check5 = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    check6 = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+
+    b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))

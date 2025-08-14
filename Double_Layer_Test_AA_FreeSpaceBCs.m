@@ -267,10 +267,13 @@ function b_Ctx = Build_RHS(ctxt, ctxt_BCs, Lap, dLap, Grad_dot_Grad, delta_layer
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     dl2 = delta_layer^2;
 
+    computed_lap = Lap*Phi(:);
+    computed_lap = computed_lap+Phi_BC(:);
+
     check1 = dLap\(-dl2*Phi_BC(:));
     % N_BCs are = 1 so no need to include them in the following lines
-    check2 = dLap\(-N_p(:).*(Lap*Phi(:)+Phi_BC(:)) - N_p_BC(:) - Grad_dot_Grad(Phi,N_p));
-    check3 = dLap\(N_m(:).*(Lap*Phi(:)+Phi_BC(:)) - N_m_BC(:) + Grad_dot_Grad(Phi,N_m));
+    check2 = dLap\(-N_p(:).*(computed_lap) - N_p_BC(:) - Grad_dot_Grad(Phi,N_p));
+    check3 = dLap\(N_m(:).*(computed_lap) - N_m_BC(:) + Grad_dot_Grad(Phi,N_m));
     check4 = Q_BC;
     check5 = Q_p_BC - Jop(reshape(N_p,Ny,Nx)).*Jop_prime(reshape(Phi,Ny,Nx));
     check6 = Q_m_BC + Jop(reshape(N_m,Ny,Nx)).*Jop_prime(reshape(Phi,Ny,Nx));
