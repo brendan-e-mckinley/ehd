@@ -7,6 +7,8 @@ set(0,'defaultAxesFontSize',35)
 clf
 clear all
 
+tic;
+
 %%% Setup grid in x-y
 Nx = 450; %256; % number of grid point along one direction
 clf
@@ -206,6 +208,8 @@ ctxt = u_next;
 %save('Test_run_N_256.mat','ctxt','Xint','Yint','xib','yib')
 
 save('Err_Run_N_450.mat','ctxt','u_next','Xint','Yint','xib','yib','Phi','Np','Nm','err','Resvec','ITER')
+elapsed_time = toc;
+fprintf('Elapsed time: %.4f seconds\n', elapsed_time);
 
 
 
