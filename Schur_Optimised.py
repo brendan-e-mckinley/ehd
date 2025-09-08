@@ -196,6 +196,39 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
 
     return Jphi
 
+# @jit(nopython=True)
+# def spreadQ(X, Y, xq, yq, q, delta, cut):
+#     Sq = np.zeros_like(X)
+#     Nq = len(q)
+    
+#     dx = X[0, 1] - X[0, 0]
+#     dy = Y[1, 0] - Y[0, 0]
+#     Nx = X.shape[1]
+#     Ny = Y.shape[0]
+
+#     for k in range(Nq):
+#         xk = xq[k]
+#         yk = yq[k]
+        
+#         # Compute local window indices
+#         i_min = max(int((xk - cut - X[0, 0]) / dx), 0)
+#         i_max = min(int((xk + cut - X[0, 0]) / dx) + 1, Nx)
+#         j_min = max(int((yk - cut - Y[0, 0]) / dy), 0)
+#         j_max = min(int((yk + cut - Y[0, 0]) / dy) + 1, Ny)
+        
+#         # Extract local window
+#         X_local = X[j_min:j_max, i_min:i_max]
+#         Y_local = Y[j_min:j_max, i_min:i_max]
+        
+#         Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2)
+#         mask = (Rk <= cut)
+        
+#         contribution = q[k] * delta(Rk) * mask
+        
+#         Sq[j_min:j_max, i_min:i_max] += contribution
+    
+#     return Sq
+
 @jit(nopython=True)
 def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     Jphi = np.zeros_like(xq)
@@ -249,7 +282,6 @@ def b_Op(ctxt):
 
 def schurOp_prev(p_blocks):
     return apply_Schur(dLap, p_blocks, delta_layer)
-
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     Phi = Phi.reshape(Ny, Nx).T
@@ -321,12 +353,12 @@ def apply_Ainv(dLap, target_vec, delta_layer):
     dl2 = delta_layer**2
 
     # second and third blocks are straightforward
-    result_vec_2 = dLap.solve_A(target_vec_2.flatten(order='F'))
-    result_vec_3 = dLap.solve_A(target_vec_3.flatten(order='F'))
+    result_vec_2 = -dLap.solve_A(target_vec_2.flatten(order='F'))
+    result_vec_3 = -dLap.solve_A(target_vec_3.flatten(order='F'))
 
     # use these results to compute first block 
     rhs = target_vec_1.flatten(order='F') + 0.5 * result_vec_2 - 0.5 * result_vec_3
-    result_vec_1 = dLap.solve_A(rhs / dl2)
+    result_vec_1 = -dLap.solve_A(rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
@@ -412,22 +444,28 @@ def schur_rhs(dLap, rhs, Nx, Ny, Nib, delta_layer):
 
     return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
 
-def post_processing_compute(dLap, p_block, delta_layer):
+def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
+    sz = Nx * Ny
+
     p = p_block[0:Nib]
     p_p = p_block[Nib:2*Nib]
     p_m = p_block[2*Nib:3*Nib]
 
+    rhs_1 = rhs[:sz]
+    rhs_2 = rhs[sz:2*sz]
+    rhs_3 = rhs[2*sz:3*sz]
+
     dl2 = delta_layer**2
 
     # get rhs for what we already know how to solve
-    rhs_n_p = -Sop_prime(p_p)
-    rhs_n_m = -Sop_prime(p_m)
+    rhs_n_p = rhs_2 - Sop_prime(p_p).flatten(order='F')
+    rhs_n_m = rhs_3 - Sop_prime(p_m).flatten(order='F')
 
-    n_p = dLap.solve_A(rhs_n_p.flatten(order='F'))
-    n_m = dLap.solve_A(rhs_n_m.flatten(order='F'))
+    n_p = -dLap.solve_A(rhs_n_p)
+    n_m = -dLap.solve_A(rhs_n_m)
 
-    rhs_phi = (0.5*n_p - 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
-    phi = dLap.solve_A(rhs_phi)
+    rhs_phi = (rhs_1 + 0.5*n_p - 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
+    phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
 
@@ -494,10 +532,9 @@ ctxt = np.concatenate([
 ])
 
 # Check initial residual
-#RHS = b_Op(ctxt)
-#err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
-#print(f'Initial residual: {err_init}')
 RHS = b_Op(ctxt)
+err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
+print(f'Initial residual: {err_init}')
 
 # Anderson acceleration parameters
 beta = 0.2
@@ -513,43 +550,28 @@ p_guess = u_n[3*Nx*Ny:]
 
 schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
 
+# Initial GMRES solve
 p_next, info = gmres(schurOp, RHS_schur, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
 
-G_u_n = post_processing_compute(dLap, p_next, delta_layer)
-
-#def AxOp_matvec(xx):
-#    return AxOp_prev(xx, ctxt)
-#AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
-# Initial GMRES solve
-#lap_operator.set_context(ctxt)
-#AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-#G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
-#if info != 0:
-#    print(f'GMRES warning: convergence info = {info}')
-
+G_u_n = post_processing_compute(dLap, p_next, RHS, Nx, Ny, Nib, delta_layer)
 u_next = G_u_n.copy()
 G_u_next = G_u_n.copy()
 err = []
 
 # Anderson acceleration loop
 for its in range(100000):
-    #RHS = b_Op(u_next)
-    #lap_operator.set_context(u_next)  # Update the context
-    #AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-    #G_u_next, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=u_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
-    
+    RHS = b_Op(u_next)
+    RHS_schur = schur_rhs(dLap, RHS, Nx, Ny, Nib, delta_layer)
+    lap_operator.set_context(u_next)  # Update the context
     schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
 
     p_next, info = gmres(schurOp, RHS_schur, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
     if info != 0:
         print(f'GMRES warning: convergence info = {info}')
 
-    G_u_next = post_processing_compute(dLap, p_next, delta_layer)
-
-    if info != 0:
-        print(f'GMRES warning at iteration {its}: convergence info = {info}')
+    G_u_next = post_processing_compute(dLap, p_next, RHS, Nx, Ny, Nib, delta_layer)
 
     m_n = min(m, its + 1)
     
@@ -576,9 +598,9 @@ for its in range(100000):
     u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
     
     # Extract solution components
-    Phi = u_next[:Ny*Nx].reshape(Ny, Nx)
-    Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx)
-    Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx)
+    Phi = u_next[:Ny*Nx].reshape(Ny, Nx, order='F')
+    Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx, order='F')
+    Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx, order='F')
     
     p_next = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
     p_p_next = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
@@ -590,7 +612,6 @@ for its in range(100000):
 
     # update guess and RHS 
     RHS = b_Op(u_next)
-    RHS_schur = schur_rhs(dLap, RHS, Nx, Ny, Nib, delta_layer)
     p_guess = u_next[3*Nx*Ny:]
 
     # Check convergence
@@ -603,18 +624,18 @@ for its in range(100000):
         print('Converged!')
         break
     
-# Plot current solution
-# if its % 10 == 0:  # Plot every 10 iterations
-#     plt.clf()
-#     fig = plt.figure(figsize=(10, 8))
-#     ax = fig.add_subplot(111, projection='3d')
-#     surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
-#     ax.set_xlabel('x')
-#     ax.set_ylabel('y')
-#     ax.set_title(r'$N_+$')
-#     plt.pause(0.01)
+    # Plot current solution
+    # if its % 10 == 0:  # Plot every 10 iterations
+    #     plt.clf()
+    #     fig = plt.figure(figsize=(10, 8))
+    #     ax = fig.add_subplot(111, projection='3d')
+    #     surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
+    #     ax.set_xlabel('x')
+    #     ax.set_ylabel('y')
+    #     ax.set_title(r'$N_+$')
+    #     plt.pause(0.01)
 
-#break
+    #break
 
 ctxt_final = u_next.copy()
 
