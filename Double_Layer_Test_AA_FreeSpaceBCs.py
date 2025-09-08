@@ -472,6 +472,8 @@ for its in range(100000):
     AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
     G_u_next, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=u_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
     
+    p = G_u_next[3*Nx*Ny:]
+
     if info != 0:
         print(f'GMRES warning at iteration {its}: convergence info = {info}')
 
