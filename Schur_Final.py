@@ -109,6 +109,16 @@ ctxt_BCs = np.concatenate([
     np.zeros(len(xib))
 ])
 
+# Boundary conditions context
+ctxt_BCs_Schur = np.concatenate([
+    Phi_BCs.flatten(order='F'),
+    Npm_BCs.flatten(order='F'),
+    Npm_BCs.flatten(order='F'),
+    np.zeros(len(xib)) - (sigma_bc),
+    np.zeros(len(xib)),
+    np.zeros(len(xib))
+])
+
 # Delta functions
 @jit(nopython=True)
 def delta_a(r, a):
@@ -270,6 +280,7 @@ def Jop_prime(P):
 
 def Jop(P):
     return interpPhi(Xint, Yint, xib, yib, P, delta, cut)
+
 def G_d_G(Phi, N_pm):
     return Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
@@ -278,6 +289,12 @@ def AxOp_prev(ctxt, ctxt_prev):
 
 def b_Op(ctxt):
     return Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
+
+def b_Op_Schur(ctxt):
+    return Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
+
+def schurOp_prev(p_blocks):
+    return apply_Schur(dLap, p_blocks, delta_layer)
 
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
@@ -326,6 +343,40 @@ def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, 
     
     return A_x_Ctx
 
+def apply_Schur(dLap, p_blocks, delta_layer):
+    p, p_p, p_m = p_blocks
+
+    # apply B 
+    Bp = Sop_prime(p)
+    Bp_p = Sop_prime(p_p)
+    Bp_m = Sop_prime(p_m)
+
+    # apply A inverse 
+    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp, Bp_p, Bp_m], delta_layer)
+
+    # apply C 
+    # res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F'))
+    res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F'))
+    res_2 = Jop_prime(Ainv_Bp_p.reshape(Ny, Nx, order='F'))
+    res_3 = Jop_prime(Ainv_Bp_m.reshape(Ny, Nx, order='F'))
+
+    return [res_1, res_2, res_3]
+
+def apply_Ainv(dLap, target_vec, delta_layer):
+    target_vec_1, target_vec_2, target_vec_3 = target_vec
+
+    dl2 = delta_layer**2
+
+    # second and third blocks are straightforward
+    result_vec_2 = -dLap.solve_A(target_vec_2.flatten(order='F'))
+    result_vec_3 = -dLap.solve_A(target_vec_3.flatten(order='F'))
+
+    # use these results to compute first block 
+    rhs = target_vec_1.flatten(order='F') + 0.5 * result_vec_2 - 0.5 * result_vec_3
+    result_vec_1 = -dLap.solve_A(rhs / dl2)
+
+    return [result_vec_1, result_vec_2, result_vec_3]
+
 def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
@@ -356,6 +407,36 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, J
     
     return b_Ctx
 
+def Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny
+    q_i = 3 * sz
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+    
+    dl2 = delta_layer**2
+    
+    computed_lap = (-Lap) @ Phi
+    computed_lap = computed_lap + Phi_BC
+
+    b_Ctx[:sz] =  -dl2 * Phi_BC
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p)
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m)
+    b_Ctx[q_i:q_i+Nib] = Q_BC
+    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    
+    return b_Ctx
+
 class ConstrainedLapOperator:
     def __init__(self, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
         self.dLap = dLap
@@ -373,6 +454,65 @@ class ConstrainedLapOperator:
     def matvec(self, xx):
         return Constrained_Lap(xx, self.ctxt_prev, self.dLap, self.delta_layer, 
                               self.Nx, self.Ny, self.Nib, self.Sop_prime, self.Jop_prime)
+    
+# LinearOperator object for using the Schur complement as our LHS matrix in GMRES
+def SchurLinearOperator(dLap, shape, Nib, delta_layer):
+    n = shape
+    def mv(p_block):
+        p = p_block[0:Nib]
+        p_p = p_block[Nib:2*Nib]
+        p_m = p_block[2*Nib:3*Nib]
+
+        res_1, res_2, res_3 = apply_Schur(dLap, [p, p_p, p_m], delta_layer)
+        return np.concatenate([res_1, res_2, res_3])
+    return LinearOperator((n, n), matvec=mv)
+
+def schur_rhs(dLap, rhs, Nx, Ny, Nib, delta_layer):
+    sz = Nx * Ny
+    q_i = 3 * sz
+
+    rhs_1 = rhs[:sz]
+    rhs_2 = rhs[sz:2*sz]
+    rhs_3 = rhs[2*sz:3*sz]
+    rhs_4 = rhs[q_i:q_i+Nib]
+    rhs_5 = rhs[q_i+Nib:q_i+2*Nib]
+    rhs_6 = rhs[q_i+2*Nib:q_i+3*Nib]
+
+    Ainv_phi, Ainv_n_p, Ainv_n_m = apply_Ainv(dLap, [rhs_1, rhs_2, rhs_3], delta_layer)
+    CAinv_phi = delta_layer * Jop_prime(Ainv_phi.reshape(Ny, Nx, order='F'))
+    CAinv_n_p = Jop_prime(Ainv_n_p.reshape(Ny, Nx, order='F'))
+    CAinv_n_m = Jop_prime(Ainv_n_m.reshape(Ny, Nx, order='F'))
+
+    schur_rhs_1 = CAinv_phi - rhs_4
+    schur_rhs_2 = CAinv_n_p - rhs_5
+    schur_rhs_3 = CAinv_n_m - rhs_6
+
+    return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
+
+def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
+    sz = Nx * Ny
+
+    p = p_block[0:Nib]
+    p_p = p_block[Nib:2*Nib]
+    p_m = p_block[2*Nib:3*Nib]
+
+    rhs_1 = rhs[:sz]
+    rhs_2 = rhs[sz:2*sz]
+    rhs_3 = rhs[2*sz:3*sz]
+
+    dl2 = delta_layer**2
+
+    # get rhs for what we already know how to solve
+    rhs_n_p = rhs_2 - Sop_prime(p_p).flatten(order='F')
+    rhs_n_m = rhs_3 - Sop_prime(p_m).flatten(order='F')
+
+    n_p = -dLap.solve_A(rhs_n_p)
+    n_m = -dLap.solve_A(rhs_n_m)
+
+    rhs_phi = (rhs_1 + 0.5*n_p - 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
+    phi = -dLap.solve_A(rhs_phi)
+
+    return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
 
 # Create the operator once
 lap_operator = ConstrainedLapOperator(dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
@@ -396,7 +536,7 @@ Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
-theta_ld = ld['theta'].flatten(order='F')
+theta_ld = ld['theta'].flatten()
 
 # Extract the coordinate vectors from the loaded grid
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
@@ -449,17 +589,20 @@ DG = np.full((len(RHS), m), np.nan)
 
 tol = 1e-5
 u_n = ctxt.copy()
+p_guess = u_n[3*Nx*Ny:]
 RHS = b_Op(ctxt)
 def AxOp_matvec(xx):
     return AxOp_prev(xx, ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 
 # Initial GMRES solve
-lap_operator.set_context(ctxt)
-AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-G_u_n, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=u_n, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
+schurRHS = b_Op_Schur(ctxt)
+computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
+p_next, info = gmres(schurOp, computedRHS, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
 if info != 0:
     print(f'GMRES warning: convergence info = {info}')
+G_u_n = post_processing_compute(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer)
 
 u_next = G_u_n.copy()
 G_u_next = G_u_n.copy()
@@ -467,11 +610,13 @@ err = []
 
 # Anderson acceleration loop
 for its in range(100000):
-    RHS = b_Op(u_next)
-    lap_operator.set_context(u_next)  # Update the context
-    AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
-    G_u_next, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=u_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
-    
+    schurRHS = b_Op_Schur(u_next)
+    computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
+    p_n, info = gmres(schurOp, computedRHS, rtol=tol, maxiter=1000, restart=500, x0=p_next, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+    if info != 0:
+        print(f'GMRES warning: convergence info = {info}')
+    G_u_next = post_processing_compute(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer)
+
     # debugging
     phi = G_u_next[:Nx*Ny]
     n_p = G_u_next[Nx*Ny:2*Nx*Ny]
@@ -514,6 +659,8 @@ for its in range(100000):
     p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
     p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
     p_m = u_next[3*Nx*Ny+2*Nib:]
+
+    p_next = u_next[3*Nx*Ny:]
     
     # Check convergence
     RHS = b_Op(u_next)
