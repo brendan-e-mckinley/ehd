@@ -280,6 +280,9 @@ def AxOp_prev(ctxt, ctxt_prev):
 def b_Op(ctxt):
     return Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
+def b_Op_Schur(ctxt):
+    return Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
+
 def schurOp_prev(p_blocks):
     return apply_Schur(dLap, p_blocks, delta_layer)
 
@@ -387,6 +390,36 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, J
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
     b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
     b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
+    b_Ctx[q_i:q_i+Nib] = Q_BC
+    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    
+    return b_Ctx
+
+def Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny
+    q_i = 3 * sz
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+    
+    dl2 = delta_layer**2
+    
+    computed_lap = (-Lap) @ Phi
+    computed_lap = computed_lap + Phi_BC
+
+    b_Ctx[:sz] =  -dl2 * Phi_BC
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p)
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m)
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -532,9 +565,26 @@ ctxt = np.concatenate([
     Q_m_init
 ])
 
+# load exact results from successful run to see if we can nail down where the error is 
+p_file = np.loadtxt('p.txt')
+p_p_file = np.loadtxt('p_p.txt')
+p_m_file = np.loadtxt('p_m.txt')
+ldData = loadmat('Err_Run_N_450.mat')
+Phi_file = ldData['Phi']
+N_p_file = ldData['Np']
+N_m_file = ldData['Nm']
+exact_results = np.concatenate([
+    Phi_file.flatten(),
+    N_p_file.flatten(),
+    N_m_file.flatten(),
+    p_file,
+    p_p_file,
+    p_m_file
+])
+
 # Check initial residual
-RHS = b_Op(ctxt)
-err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
+RHS = b_Op(exact_results)
+err_init = np.linalg.norm(AxOp_prev(exact_results, exact_results) - RHS) / np.linalg.norm(RHS)
 print(f'Initial residual: {err_init}')
 
 # Anderson acceleration parameters
@@ -550,8 +600,16 @@ def AxOp_matvec(xx):
     return AxOp_prev(xx, ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 
-RHS_schur = schur_rhs(dLap, RHS, Nx, Ny, Nib, delta_layer)
-p_guess = u_n[3*Nx*Ny:]
+RHS_schur_system = b_Op_Schur(exact_results)
+RHS_schur = schur_rhs(dLap, RHS_schur_system, Nx, Ny, Nib, delta_layer)
+p_exact = exact_results[3*Nx*Ny:]
+full_check = post_processing_compute(dLap, p_exact, RHS_schur_system, Nx, Ny, Nib, delta_layer)
+phi_check = full_check[:Nx*Ny]
+n_p_check = full_check[Nx*Ny:2*Nx*Ny]
+n_m_check = full_check[2*Nx*Ny:3*Nx*Ny]
+p_check = full_check[3*Nx*Ny:3*Nx*Ny+Nib]
+p_p_check = full_check[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+p_m_check = full_check[3*Nx*Ny+2*Nib:]
 
 schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
 
@@ -559,19 +617,18 @@ lap_operator.set_context(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
 
 # Initial GMRES solve
-p_next, info = gmres(schurOp, RHS_schur, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
-if info != 0:
-    print(f'GMRES warning: convergence info = {info}')
+p_next, info = gmres(schurOp, RHS_schur, rtol=tol, maxiter=1000, restart=500, x0=p_exact, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
+full_results = post_processing_compute(dLap, p_next, RHS_schur_system, Nx, Ny, Nib, delta_layer)
+phi_results = full_results[:Nx*Ny]
+n_p_results = full_results[Nx*Ny:2*Nx*Ny]
+n_m_results = full_results[2*Nx*Ny:3*Nx*Ny]
+p_results = full_results[3*Nx*Ny:3*Nx*Ny+Nib]
+p_p_results = full_results[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+p_m_results = full_results[3*Nx*Ny+2*Nib:]
+RHS_results = b_Op(full_results)
 
-G_u_n = post_processing_compute(dLap, p_next, RHS, Nx, Ny, Nib, delta_layer)
-u_next = G_u_n.copy()
-G_u_next = G_u_n.copy()
-err = []
-
-p_guess = u_next[3*Nx*Ny:]
-
-res = b_Op(u_exact) - lap_operator.matvec(u_exact)
-print(np.linalg.norm(res))
+err_schur = np.linalg.norm(AxOp_prev(full_results, full_results) - RHS) / np.linalg.norm(RHS)
+print(f'Schur residual: {err_schur}')
 
 # Anderson acceleration loop
 # for its in range(100000):
