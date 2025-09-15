@@ -293,9 +293,6 @@ def b_Op(ctxt):
 def b_Op_Schur(ctxt):
     return Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
-def schurOp_prev(p_blocks):
-    return apply_Schur(dLap, p_blocks, delta_layer)
-
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     Phi = Phi.reshape(Ny, Nx).T
@@ -351,8 +348,12 @@ def apply_Schur(dLap, p_blocks, delta_layer):
     Bp_p = Sop_prime(p_p)
     Bp_m = Sop_prime(p_m)
 
+    Bp_flat = Bp.flatten(order='F')
+    Bp_p_flat = Bp_p.flatten(order='F')
+    Bp_m_flat = Bp_m.flatten(order='F')
+
     # apply A inverse 
-    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp, Bp_p, Bp_m], delta_layer)
+    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp_flat, Bp_p_flat, Bp_m_flat], delta_layer)
 
     # apply C 
     # res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F'))
@@ -509,7 +510,7 @@ def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
     n_p = -dLap.solve_A(rhs_n_p)
     n_m = -dLap.solve_A(rhs_n_m)
 
-    rhs_phi = (rhs_1 + 0.5*n_p - 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
+    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2 # TODO: ask brennan why tf this change fixed my code
     phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
@@ -664,7 +665,8 @@ for its in range(100000):
     
     # Check convergence
     RHS = b_Op(u_next)
-    err_curr = np.linalg.norm(AxOp_prev(u_next, u_next) - RHS) / np.linalg.norm(RHS)
+    AxOp_relevant = AxOp_prev(u_next, u_next)[:3*Nx*Ny]
+    err_curr = np.linalg.norm(AxOp_relevant - RHS[:3*Nx*Ny]) / np.linalg.norm(RHS[:3*Nx*Ny])
     err.append(err_curr)
     
     print(f'Iteration {its}: residual = {err_curr}')

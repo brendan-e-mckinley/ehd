@@ -109,6 +109,16 @@ ctxt_BCs = np.concatenate([
     np.zeros(len(xib))
 ])
 
+# Boundary conditions context
+ctxt_BCs_Schur = np.concatenate([
+    Phi_BCs.flatten(order='F'),
+    Npm_BCs.flatten(order='F'),
+    Npm_BCs.flatten(order='F'),
+    np.zeros(len(xib)) - (sigma_bc),
+    np.zeros(len(xib)),
+    np.zeros(len(xib))
+])
+
 # Delta functions
 @jit(nopython=True)
 def delta_a(r, a):
@@ -281,7 +291,7 @@ def b_Op(ctxt):
     return Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
 def b_Op_Schur(ctxt):
-    return Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
+    return Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
 def schurOp_prev(p_blocks):
     return apply_Schur(dLap, p_blocks, delta_layer)
@@ -341,8 +351,12 @@ def apply_Schur(dLap, p_blocks, delta_layer):
     Bp_p = Sop_prime(p_p)
     Bp_m = Sop_prime(p_m)
 
+    Bp_flat = Bp.flatten(order='F')
+    Bp_p_flat = Bp_p.flatten(order='F')
+    Bp_m_flat = Bp_m.flatten(order='F')
+
     # apply A inverse 
-    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp, Bp_p, Bp_m], delta_layer)
+    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp_flat, Bp_p_flat, Bp_m_flat], delta_layer)
 
     # apply C 
     res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F'))
@@ -357,14 +371,27 @@ def apply_Ainv(dLap, target_vec, delta_layer):
     dl2 = delta_layer**2
 
     # second and third blocks are straightforward
-    result_vec_2 = -dLap.solve_A(target_vec_2.flatten(order='F'))
-    result_vec_3 = -dLap.solve_A(target_vec_3.flatten(order='F'))
+    result_vec_2 = -dLap.solve_A(target_vec_2)
+    result_vec_3 = -dLap.solve_A(target_vec_3)
 
     # use these results to compute first block 
     rhs = target_vec_1.flatten(order='F') + 0.5 * result_vec_2 - 0.5 * result_vec_3
     result_vec_1 = -dLap.solve_A(rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
+
+# def apply_Ainv(dLap, target_vec, delta_layer):
+#     target_vec_1, target_vec_2, target_vec_3 = target_vec
+
+#     dl2 = delta_layer**2
+
+#     # second and third blocks are straightforward
+#     result_vec_2 = -dLap.solve_A(target_vec_2)
+#     result_vec_3 = -dLap.solve_A(target_vec_3)
+
+#     # first block more complex
+#     result_vec_1 = 1/dl2 * (-dLap.solve_A(target_vec_1) - dLap.solve_A(-dLap.solve_A(target_vec_2)) + dLap.solve_A(-dLap.solve_A(target_vec_2)))
+#     return [result_vec_1, result_vec_2, result_vec_3]
 
 def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
     b_Ctx = np.zeros_like(ctxt_BCs)
@@ -498,7 +525,7 @@ def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
     n_p = -dLap.solve_A(rhs_n_p)
     n_m = -dLap.solve_A(rhs_n_m)
 
-    rhs_phi = (rhs_1 + 0.5*n_p - 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
+    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
     phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
@@ -611,7 +638,85 @@ p_check = full_check[3*Nx*Ny:3*Nx*Ny+Nib]
 p_p_check = full_check[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
 p_m_check = full_check[3*Nx*Ny+2*Nib:]
 
+# Check residual from post_processing_compute
+AxCheckFull = AxOp_prev(full_check, full_check)
+AxCheckPhi = AxCheckFull[:Nx*Ny]
+AxCheckNp = AxCheckFull[Nx*Ny:2*Nx*Ny]
+AxCheckNm = AxCheckFull[2*Nx*Ny:3*Nx*Ny]
+err_init_ppc_phi = np.linalg.norm(AxCheckPhi - RHS[:Nx*Ny]) / np.linalg.norm(RHS[:Nx*Ny])
+print(f'Initial residual from post_processing_compute Phi: {err_init_ppc_phi}')
+err_init_ppc_np = np.linalg.norm(AxCheckNp - RHS[Nx*Ny:2*Nx*Ny]) / np.linalg.norm(RHS[Nx*Ny:2*Nx*Ny])
+print(f'Initial residual from post_processing_compute Np: {err_init_ppc_np}')
+err_init_ppc_nm = np.linalg.norm(AxCheckNm - RHS[2*Nx*Ny:3*Nx*Ny]) / np.linalg.norm(RHS[2*Nx*Ny:3*Nx*Ny])
+print(f'Initial residual from post_processing_compute Nm: {err_init_ppc_nm}')
+err_init_ppc = np.linalg.norm(AxCheckFull - RHS) / np.linalg.norm(RHS)
+print(f'Initial residual from post_processing_compute: {err_init_ppc}')
+
 schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
+
+# schurOpPExact = schurOp(p_exact)
+# schurOpP1 = schurOpPExact[:Nib]
+# schurOpP2 = schurOpPExact[Nib:2*Nib]
+# schurOpP3 = schurOpPExact[2*Nib:3*Nib]
+# err_init_schur_p1 = np.linalg.norm(schurOpP1 - RHS_schur[:Nib]) / np.linalg.norm(RHS_schur[:Nib])
+# print(f'Initial residual schur p1: {err_init_schur_p1}')
+# err_init_schur_p2 = np.linalg.norm(schurOpP2 - RHS_schur[Nib:2*Nib]) / np.linalg.norm(RHS_schur[Nib:2*Nib])
+# print(f'Initial residual schur: {err_init_schur_p2}')
+# err_init_schur_p3 = np.linalg.norm(schurOpP2 - RHS_schur[Nib*2:Nib*3]) / np.linalg.norm(RHS_schur[Nib*2:Nib*3])
+# print(f'Initial residual schur p3: {err_init_schur_p3}')
+
+err_init_schur = np.linalg.norm(schurOp(p_exact) - RHS_schur) / np.linalg.norm(RHS_schur)
+print(f'Initial residual schur: {err_init_schur}')
+
+# # ---- diagnostic for Schur operator ----
+# # assume p_exact arrays exist (length Nib) from your "exact" solution
+# p_ex = p_exact.copy()         # your exact p from full solve
+# p_p_ex = p_exact.copy()
+# p_m_ex = p_exact.copy()
+
+# # 1) compute B = S' * p  (what apply_Schur uses)
+# Bp   = Sop_prime(p_ex)
+# Bp_p = Sop_prime(p_p_ex)
+# Bp_m = Sop_prime(p_m_ex)
+
+# print("shapes: Bp, Bp_p, Bp_m:", Bp.shape, Bp_p.shape, Bp_m.shape)
+
+
+# # 2) Ainv(B) via your apply_Ainv (what apply_Schur uses)
+# Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp, Bp_p, Bp_m], delta_layer)
+# print("Ainv_Bp norms:", np.linalg.norm(Ainv_Bp), np.linalg.norm(Ainv_Bp_p), np.linalg.norm(Ainv_Bp_m))
+
+# # 3) apply C to them (Schur operator blocks)
+# S_res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F')).flatten()
+# S_res_2 =        Jop_prime(Ainv_Bp_p.reshape(Ny, Nx, order='F')).flatten()
+# S_res_3 =        Jop_prime(Ainv_Bp_m.reshape(Ny, Nx, order='F')).flatten()
+
+# print("S_res norms:", np.linalg.norm(S_res_1), np.linalg.norm(S_res_2), np.linalg.norm(S_res_3))
+
+# # 4) compute Schur RHS (what you feed GMRES) using the exact full RHS
+# schur_rhs_vec = schur_rhs(dLap, RHS_schur_system, Nx, Ny, Nib, delta_layer)
+
+# r1 = schur_rhs_vec[:Nib]
+# r2 = schur_rhs_vec[Nib:2*Nib]
+# r3 = schur_rhs_vec[2*Nib:3*Nib]
+# print("schur_rhs norms:", np.linalg.norm(r1), np.linalg.norm(r2), np.linalg.norm(r3))
+
+# # 5) residuals per block (what you already checked partially)
+# print("block residual norms S - RHS:",
+#       np.linalg.norm(S_res_1 - r1),
+#       np.linalg.norm(S_res_2 - r2),
+#       np.linalg.norm(S_res_3 - r3))
+
+# # 6) PRINT a few entries to localize sign/scale issues
+# i = np.arange(min(8, Nib))
+# print("sample entries (S_res_1, r1):")
+# print(np.vstack([S_res_1[i], r1[i]]))
+# print("sample entries (S_res_2, r2):")
+# print(np.vstack([S_res_2[i], r2[i]]))
+# print("sample entries (S_res_3, r3):")
+# print(np.vstack([S_res_3[i], r3[i]]))
+
+
 
 lap_operator.set_context(ctxt)
 AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
