@@ -630,7 +630,7 @@ AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 RHS_schur_system = b_Op_Schur(exact_results)
 RHS_schur = schur_rhs(dLap, RHS_schur_system, Nx, Ny, Nib, delta_layer)
 p_exact = exact_results[3*Nx*Ny:]
-full_check = post_processing_compute(dLap, p_exact, RHS_schur_system, Nx, Ny, Nib, delta_layer)
+full_check = post_processing_compute(dLap, np.concatenate([p_file, p_p_file, p_m_file]), RHS_schur_system, Nx, Ny, Nib, delta_layer)
 phi_check = full_check[:Nx*Ny]
 n_p_check = full_check[Nx*Ny:2*Nx*Ny]
 n_m_check = full_check[2*Nx*Ny:3*Nx*Ny]
@@ -643,12 +643,26 @@ AxCheckFull = AxOp_prev(full_check, full_check)
 AxCheckPhi = AxCheckFull[:Nx*Ny]
 AxCheckNp = AxCheckFull[Nx*Ny:2*Nx*Ny]
 AxCheckNm = AxCheckFull[2*Nx*Ny:3*Nx*Ny]
+AxCheckP = AxCheckFull[3*Nx*Ny:3*Nx*Ny+Nib]
+AxCheckPp = AxCheckFull[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+AxCheckPm = AxCheckFull[3*Nx*Ny+2*Nib:]
+
+rhs_p = RHS[3*Nx*Ny:3*Nx*Ny+Nib]
+rhs_pp = RHS[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+rhs_pm = RHS[3*Nx*Ny+2*Nib:]
 err_init_ppc_phi = np.linalg.norm(AxCheckPhi - RHS[:Nx*Ny]) / np.linalg.norm(RHS[:Nx*Ny])
 print(f'Initial residual from post_processing_compute Phi: {err_init_ppc_phi}')
 err_init_ppc_np = np.linalg.norm(AxCheckNp - RHS[Nx*Ny:2*Nx*Ny]) / np.linalg.norm(RHS[Nx*Ny:2*Nx*Ny])
 print(f'Initial residual from post_processing_compute Np: {err_init_ppc_np}')
 err_init_ppc_nm = np.linalg.norm(AxCheckNm - RHS[2*Nx*Ny:3*Nx*Ny]) / np.linalg.norm(RHS[2*Nx*Ny:3*Nx*Ny])
 print(f'Initial residual from post_processing_compute Nm: {err_init_ppc_nm}')
+err_init_ppc_p = np.linalg.norm(AxCheckP - RHS[3*Nx*Ny:3*Nx*Ny+Nib]) / np.linalg.norm(RHS[3*Nx*Ny:3*Nx*Ny+Nib])
+print(f'Initial residual from post_processing_compute P: {err_init_ppc_p}')
+err_init_ppc_pp = np.linalg.norm(AxCheckPp - RHS[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]) / np.linalg.norm(RHS[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib])
+print(f'Initial residual from post_processing_compute Pp: {err_init_ppc_pp}')
+err_init_ppc_pm = np.linalg.norm(AxCheckPm - RHS[3*Nx*Ny+2*Nib:]) / np.linalg.norm(RHS[3*Nx*Ny+2*Nib:])
+print(f'Initial residual from post_processing_compute Pm: {err_init_ppc_pm}')
+
 err_init_ppc = np.linalg.norm(AxCheckFull - RHS) / np.linalg.norm(RHS)
 print(f'Initial residual from post_processing_compute: {err_init_ppc}')
 

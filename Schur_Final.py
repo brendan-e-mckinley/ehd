@@ -373,7 +373,7 @@ def apply_Ainv(dLap, target_vec, delta_layer):
     result_vec_3 = -dLap.solve_A(target_vec_3.flatten(order='F'))
 
     # use these results to compute first block 
-    rhs = target_vec_1.flatten(order='F') + 0.5 * result_vec_2 - 0.5 * result_vec_3
+    rhs = target_vec_1.flatten(order='F') - 0.5 * result_vec_2 + 0.5 * result_vec_3
     result_vec_1 = -dLap.solve_A(rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
@@ -654,8 +654,9 @@ for its in range(100000):
     
     # Check convergence
     RHS = b_Op(u_next)
-    AxOp_relevant = AxOp_prev(u_next, u_next)[:3*Nx*Ny]
-    err_curr = np.linalg.norm(AxOp_relevant - RHS[:3*Nx*Ny]) / np.linalg.norm(RHS[:3*Nx*Ny])
+    AxOp = AxOp_prev(u_next, u_next)
+    err_curr = np.linalg.norm(AxOp - RHS) / np.linalg.norm(RHS)
+    
     err.append(err_curr)
     
     print(f'Iteration {its}: residual = {err_curr}')
@@ -690,11 +691,6 @@ savemat('Err_Run_N_450.mat', {
     'Nm': Nm,
     'err': np.array(err)
 })
-
-# Save p values
-np.savetxt('p.txt', p, delimiter=' ')
-np.savetxt('p_p.txt', p_p, delimiter=' ')
-np.savetxt('p_m.txt', p_m, delimiter=' ')
 
 print("Computation completed and results saved!")
 
