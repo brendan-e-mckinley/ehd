@@ -109,7 +109,7 @@ ctxt_BCs = np.concatenate([
     np.zeros(len(xib))
 ])
 
-# Boundary conditions context
+# Boundary conditions context for Schur system
 ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.flatten(order='F'),
     Npm_BCs.flatten(order='F'),
@@ -543,27 +543,16 @@ theta_ld = ld['theta'].flatten()
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-ldData = loadmat('data.mat')
-Phi_init = ldData['Phi_init']
-N_p_init = ldData['N_p_init']
-N_m_init = ldData['N_m_init']
+# Identical data to MATLAB code
+# ldData = loadmat('data.mat')
+# Phi_init = ldData['Phi_init']
+# N_p_init = ldData['N_p_init']
+# N_m_init = ldData['N_m_init']
 
-#Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
-
-#N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-#N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-
-#N_p_init_f = RegularGridInterpolator((x_ld, y_ld), N_p_ld, 
-#                                    method=METHOD, bounds_error=False, fill_value=None)
-#N_m_init_f = RegularGridInterpolator((x_ld, y_ld), N_m_ld, 
-#                                    method=METHOD, bounds_error=False, fill_value=None)
-
-#points_new = np.column_stack([Xint.flatten(order='F'), Yint.flatten(order='F')])
-
-#N_p_init = N_p_init_f(points_new).reshape(Ny, Nx)
-#N_m_init = N_m_init_f(points_new).reshape(Ny, Nx)
-
-# Interpolate boundary quantities
+# Interpolate initial guesses
+Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
 Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
 Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
@@ -676,17 +665,15 @@ for its in range(100000):
         break
     
     # Plot current solution
-    # if its % 10 == 0:  # Plot every 10 iterations
-    #     plt.clf()
-    #     fig = plt.figure(figsize=(10, 8))
-    #     ax = fig.add_subplot(111, projection='3d')
-    #     surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
-    #     ax.set_xlabel('x')
-    #     ax.set_ylabel('y')
-    #     ax.set_title(r'$N_+$')
-    #     plt.pause(0.01)
-
-    #break
+    if its % 10 == 0:  # Plot every 10 iterations
+        plt.clf()
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_title(r'$N_+$')
+        plt.pause(0.01)
 
 ctxt_final = u_next.copy()
 
