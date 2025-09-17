@@ -4,10 +4,10 @@ import time
 from numba import jit
 from sksparse.cholmod import cholesky
 from scipy.sparse import spdiags, eye, kron
-from scipy.sparse.linalg import spsolve, gmres, LinearOperator, splu
+from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.linalg import qr
 from scipy.io import loadmat, savemat
-from scipy.interpolate import RegularGridInterpolator, Akima1DInterpolator, interpn
+from scipy.interpolate import Akima1DInterpolator, interpn
 
 t = time.time()
 
@@ -73,15 +73,15 @@ Npm_BCs[:, -1] += (1/dx/dx) * Npm_exact(X[-1, -1], yint)
 
 RHS = np.zeros_like(Xint)
 
-Test_Phi = spsolve(Lap, RHS.flatten(order='F') - Phi_BCs.flatten(order='F'))
-Test_Npm = spsolve(Lap, RHS.flatten(order='F') - Npm_BCs.flatten(order='F'))
+Test_Phi = spsolve(Lap, RHS.ravel(order='F') - Phi_BCs.ravel(order='F'))
+Test_Npm = spsolve(Lap, RHS.ravel(order='F') - Npm_BCs.ravel(order='F'))
 
-fig = plt.figure(figsize=(15, 6))
-ax1 = fig.add_subplot(121, projection='3d')
-ax1.plot_surface(Xint, Yint, Test_Phi.reshape(Ny, Nx), cmap='turbo')
-ax2 = fig.add_subplot(122, projection='3d')
-ax2.plot_surface(Xint, Yint, Test_Npm.reshape(Ny, Nx), cmap='turbo')
-plt.show()
+# fig = plt.figure(figsize=(15, 6))
+# ax1 = fig.add_subplot(121, projection='3d')
+# ax1.plot_surface(Xint, Yint, Test_Phi.reshape(Ny, Nx), cmap='turbo')
+# ax2 = fig.add_subplot(122, projection='3d')
+# ax2.plot_surface(Xint, Yint, Test_Npm.reshape(Ny, Nx), cmap='turbo')
+# plt.show()
 
 # Make immersed boundary mats
 rad = 0.25
@@ -101,9 +101,9 @@ N_pm_BC = Npm_exact(X, Y)
 
 # Boundary conditions context
 ctxt_BCs = np.concatenate([
-    Phi_BCs.flatten(order='F'),
-    Npm_BCs.flatten(order='F'),
-    Npm_BCs.flatten(order='F'),
+    Phi_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
     np.zeros(len(xib)) - (sigma_bc/delta_layer),
     np.zeros(len(xib)),
     np.zeros(len(xib))
@@ -111,9 +111,9 @@ ctxt_BCs = np.concatenate([
 
 # Boundary conditions context for Schur system
 ctxt_BCs_Schur = np.concatenate([
-    Phi_BCs.flatten(order='F'),
-    Npm_BCs.flatten(order='F'),
-    Npm_BCs.flatten(order='F'),
+    Phi_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
     np.zeros(len(xib)) - (sigma_bc),
     np.zeros(len(xib)),
     np.zeros(len(xib))
@@ -311,7 +311,7 @@ def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     N_pm_x = (0.5/dx) * (N_pm_BC_x[:, 2:] - N_pm_BC_x[:, :-2])
 
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
-    return G_d_G.flatten(order='F')
+    return G_d_G.ravel(order='F')
 
 def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
     A_x_Ctx = np.zeros_like(ctxt)
@@ -331,9 +331,9 @@ def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, 
     
     dl2 = delta_layer**2
 
-    A_x_Ctx[:sz] = dl2 * Phi - dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
-    A_x_Ctx[sz:2*sz] = N_p - dLap.solve_A(SQ_p.flatten(order='F'))
-    A_x_Ctx[2*sz:3*sz] = N_m - dLap.solve_A(SQ_m.flatten(order='F'))
+    A_x_Ctx[:sz] = dl2 * Phi - dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.ravel(order='F'))
+    A_x_Ctx[sz:2*sz] = N_p - dLap.solve_A(SQ_p.ravel(order='F'))
+    A_x_Ctx[2*sz:3*sz] = N_m - dLap.solve_A(SQ_m.ravel(order='F'))
     A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
@@ -348,9 +348,9 @@ def apply_Schur(dLap, p_blocks, delta_layer):
     Bp_p = Sop_prime(p_p)
     Bp_m = Sop_prime(p_m)
 
-    Bp_flat = Bp.flatten(order='F')
-    Bp_p_flat = Bp_p.flatten(order='F')
-    Bp_m_flat = Bp_m.flatten(order='F')
+    Bp_flat = Bp.ravel(order='F')
+    Bp_p_flat = Bp_p.ravel(order='F')
+    Bp_m_flat = Bp_m.ravel(order='F')
 
     # apply A inverse 
     Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp_flat, Bp_p_flat, Bp_m_flat], delta_layer)
@@ -369,11 +369,11 @@ def apply_Ainv(dLap, target_vec, delta_layer):
     dl2 = delta_layer**2
 
     # second and third blocks are straightforward
-    result_vec_2 = -dLap.solve_A(target_vec_2.flatten(order='F'))
-    result_vec_3 = -dLap.solve_A(target_vec_3.flatten(order='F'))
+    result_vec_2 = -dLap.solve_A(target_vec_2.ravel(order='F'))
+    result_vec_3 = -dLap.solve_A(target_vec_3.ravel(order='F'))
 
     # use these results to compute first block 
-    rhs = target_vec_1.flatten(order='F') - 0.5 * result_vec_2 + 0.5 * result_vec_3
+    rhs = target_vec_1.ravel(order='F') - 0.5 * result_vec_2 + 0.5 * result_vec_3
     result_vec_1 = -dLap.solve_A(rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
@@ -504,13 +504,13 @@ def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
     dl2 = delta_layer**2
 
     # get rhs for what we already know how to solve
-    rhs_n_p = rhs_2 - Sop_prime(p_p).flatten(order='F')
-    rhs_n_m = rhs_3 - Sop_prime(p_m).flatten(order='F')
+    rhs_n_p = rhs_2 - Sop_prime(p_p).ravel(order='F')
+    rhs_n_m = rhs_3 - Sop_prime(p_m).ravel(order='F')
 
     n_p = -dLap.solve_A(rhs_n_p)
     n_m = -dLap.solve_A(rhs_n_m)
 
-    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2 # TODO: ask brennan why tf this change fixed my code
+    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).ravel(order='F')) / dl2 # TODO: ask brennan why tf this change fixed my code
     phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
@@ -527,7 +527,7 @@ Nx_ld = int(ld['Nx'][0, 0])
 Nib_ld = int(ld['Nib'][0, 0])
 sz = Ny_ld * Nx_ld
 
-ctxt_ld = ld['ctxt'].flatten(order='F')
+ctxt_ld = ld['ctxt'].ravel(order='F')
 Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')  # Important: use Fortran order
 N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
 N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
@@ -537,7 +537,7 @@ Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
-theta_ld = ld['theta'].flatten()
+theta_ld = ld['theta'].ravel()
 
 # Extract the coordinate vectors from the loaded grid
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
@@ -558,9 +558,9 @@ Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=Tr
 Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
 ctxt = np.concatenate([
-    Phi_init.flatten(order='F'),
-    N_p_init.flatten(order='F'),
-    N_m_init.flatten(order='F'),
+    Phi_init.ravel(order='F'),
+    N_p_init.ravel(order='F'),
+    N_m_init.ravel(order='F'),
     Q_init,
     Q_p_init,
     Q_m_init
@@ -572,7 +572,7 @@ err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
 print(f'Initial residual: {err_init}')
 
 # Anderson acceleration parameters
-beta = 0.2
+beta = 0.4
 m = 50
 DU = np.full((len(RHS), m), np.nan)
 DG = np.full((len(RHS), m), np.nan)
@@ -664,17 +664,15 @@ for its in range(100000):
     if err_curr < 1e-4:
         print('Converged!')
         break
-    
-    # Plot current solution
-    if its % 10 == 0:  # Plot every 10 iterations
-        plt.clf()
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
-        ax.set_xlabel('x')
-        ax.set_ylabel('y')
-        ax.set_title(r'$N_+$')
-        plt.pause(0.01)
+
+plt.clf()
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_title(r'$N_+$')
+plt.pause(0.01)
 
 ctxt_final = u_next.copy()
 
