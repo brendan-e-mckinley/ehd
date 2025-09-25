@@ -8,6 +8,49 @@ from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.linalg import qr
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
+import amrex_poisson
+
+class AmrexDLap:
+    """
+    Minimal Python wrapper around the amrex_poisson.solve_poisson function,
+    exposing a .solve_A(flat_rhs) method that returns a flat Fortran-ordered solution.
+    This version *rebuilds* the AMReX solver on every call (simple but slower).
+    """
+    def __init__(self, nx, ny, x_lo=0.0, x_hi=2*np.pi, y_lo=0.0, y_hi=2*np.pi,
+                 tol=1e-10, nghost=1, fortran_order=True):
+        self.nx = nx
+        self.ny = ny
+        self.x_lo = x_lo; self.x_hi = x_hi
+        self.y_lo = y_lo; self.y_hi = y_hi
+        self.tol = tol
+        self.nghost = nghost
+        self.fortran_order = fortran_order
+
+        # Initialize AMReX once per process (call once before any solves)
+        amrex_poisson.amrex_init([])
+
+    def solve_A(self, rhs_flat):
+        """
+        rhs_flat: 1D numpy array of length nx*ny, flattened in Fortran order (column-major)
+        Returns: solution flattened in Fortran order (same layout).
+        """
+        # Reshape into 2D array with shape (ny, nx) because the C++ expects (ny, nx) layout
+        # We pass fortran_order_rhs=True to indicate rhs_flat came from ravel(order='F')
+        phi2d = rhs_flat.reshape((self.ny, self.nx), order='F')
+
+        # call AMReX solver; note solver returns phi as (ny, nx) C-order numpy array
+        phi_out = amrex_poisson.solve_poisson(phi2d,
+                                              x_lo=self.x_lo, x_hi=self.x_hi,
+                                              y_lo=self.y_lo, y_hi=self.y_hi,
+                                              tol=self.tol,
+                                              nghost=self.nghost,
+                                              fortran_order_rhs=True)
+
+        # The returned array is shape (ny, nx). We need to return ravel(order='F') to match existing code
+        return phi_out.ravel(order='F')
+
+    def finalize(self):
+        amrex_poisson.amrex_finalize()
 
 t = time.time()
 
@@ -43,7 +86,10 @@ D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
 I_nx = eye(Nx)
 I_ny = eye(Ny)
 Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
-dLap = cholesky(Lap) # Cholesky decomposition
+# dLap = cholesky(Lap) # Cholesky decomposition
+
+dLap = AmrexDLap(Nx, Ny, x_lo=-L/2, x_hi=L/2, y_lo=-L/2, y_hi=L/2,
+                 tol=1e-4, nghost=1, fortran_order=True)
 
 # Parameters
 beta_BC = 7.94

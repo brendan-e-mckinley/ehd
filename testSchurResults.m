@@ -138,73 +138,12 @@ ctxt = [Phi_init(:);N_p_init(:);N_m_init(:);Q_init(:);Q_p_init(:);Q_m_init(:)];
 % %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % ctxt_gmres = ctxt;
 
-RHS = b_Op(ctxt);
-err = norm(AxOp_prev(ctxt,ctxt)-RHS)/norm(RHS);
+% check exact solution
+schur = load('Err_Run_Schur.mat');
+ctxt_schur = schur.ctxt';
+RHS = b_Op(ctxt_schur);
+err = norm(AxOp_prev(ctxt_schur,ctxt_schur)-RHS)/norm(RHS);
 disp(['residual: ' num2str(err)])
-
-beta = 0.2;
-m = 50;
-DU = NaN(length(RHS),m);
-DG = NaN(length(RHS),m);
-
-
-tol = 1e-5; %0.001*dx*dx; %0.01*dx*dx
-u_n = ctxt;
-RHS = b_Op(ctxt);
-AxOp = @(xx) AxOp_prev(xx,ctxt);
-[G_u_n,FLAG,RELRES,ITER] = gmres(AxOp,RHS(:),1000,tol,1000,[],[],u_n); 
-u_next = G_u_n;
-G_u_next = G_u_n;
-for its = 1:100000
-RHS = b_Op(u_next);
-AxOp = @(xx) AxOp_prev(xx,u_next);
-[G_u_next,FLAG,RELRES,ITER,Resvec] = gmres(AxOp,RHS(:),1000,tol,1000,[],[],u_next); 
-
-m_n = min(m,its);
-DU(:,m_n) = u_next-u_n;
-DG(:,m_n) = G_u_next - G_u_n;
-if size(DU,2) > m
-    DU = DU(:,2:end);
-    DG = DG(:,2:end);
-end
-
-f_n = G_u_next - u_next;
-DF = DG(:,1:m_n) - DU(:,1:m_n);
-[Qdf,Rdf] = qr(DF,"econ");
-gamma = Rdf\(Qdf'*f_n);
-u_n = u_next;
-G_u_n = G_u_next;
-
-u_next = (G_u_next - DG(:,1:m_n)*gamma) - (1-beta)*(f_n-DF*gamma);
-
-
-Phi = reshape(u_next(1:Ny*Nx),Ny,Nx);
-Np = reshape(u_next(Ny*Nx+1:2*Nx*Ny),Ny,Nx);
-Nm = reshape(u_next(2*Ny*Nx+1:3*Nx*Ny),Ny,Nx);
-
-RHS = b_Op(u_next);
-err(its) = norm(AxOp_prev(u_next,u_next)-RHS)/norm(RHS);
-disp(['residual: ' num2str(err(its))])
-disp(['Itts: ' num2str(ITER(end))])
-if err(its) < 1e-4 %1e-3
-    disp('done')
-    break
-end
-
-clf
-hs = surf(Xint,Yint,Np);
-set(hs,'facealpha',0.8)
-hold all
-xlabel('x')
-ylabel('y')
-title('potential  $$\phi$$')
-drawnow
-end
-
-ctxt = u_next;
-%save('Test_run_N_256.mat','ctxt','Xint','Yint','xib','yib')
-
-save('Err_Run_N_450.mat','ctxt','u_next','Xint','Yint','xib','yib','Phi','Np','Nm','err','Resvec','ITER')
 
 
 

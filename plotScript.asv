@@ -1,0 +1,86 @@
+clear;clc;
+
+ld = load('Err_Run_Schur.mat');
+
+Phi = ld.Phi;
+Np = ld.Np';
+Nm = ld.Nm';
+Xint = ld.Xint;
+Yint = ld.Yint;
+
+% grid
+Nx = 450;
+L = 2.0*pi;
+x = linspace(-L/2,L/2,Nx+2);
+dx = x(2)-x(1);
+
+% immersed boundary 
+rad = 0.25 + .001;
+dth = dx/rad;
+theta = (0:dth:(2*pi-dth))';
+Nib = length(theta);
+xib = rad*cos(theta);
+yib = rad*sin(theta);
+rad_cover = rad - .002;
+xib_cover = rad_cover*cos(theta);
+yib_cover = rad_cover*sin(theta);
+
+% color
+customColor_Np = [238 250 255] / 255;
+customColor_Nm = [254 236 255] / 255;
+
+figure(1);
+Np_plot = surf(Xint,Yint,Np);
+set(Np_plot,'facealpha',0.8);
+xlabel('x');
+ylabel('y');
+xlim([-pi/6 pi/6]);
+ylim([-pi/6 pi/6]);
+title('N+  $$N+$$');
+colormap(slanCM('spring'));
+colorbar;
+drawnow
+view(0, 90)
+shading interp
+
+hold on 
+fill3(xib_cover, yib_cover, zeros(size(xib_cover)) + 3, customColor, 'FaceAlpha', 1, 'EdgeColor', 'none');
+h_points = plot3(xib, yib, zeros(size(xib)) + 2, 'k.', 'MarkerSize', 6);
+uistack(h_points,'top');
+hold off
+
+figure(2);
+Nm_plot = surf(Xint,Yint,Nm);
+set(Nm_plot,'facealpha',0.8);
+xlabel('x');
+ylabel('y');
+xlim([-pi/6 pi/6]);
+ylim([-pi/6 pi/6]);
+title('N-  $$N-$$');
+colormap(slanCM('bone'));
+colorbar;
+caxis([0.9 1.2]);
+drawnow;
+view(0, 90)
+shading interp
+
+hold on 
+fill3(xib_cover, yib_cover, zeros(size(xib_cover)) + 3, customColor, 'FaceAlpha', 1, 'EdgeColor', 'none');
+h_points = plot3(xib, yib, zeros(size(xib)) + 2, 'k.', 'MarkerSize', 6);
+uistack(h_points,'top');
+hold off
+% figure(2);
+% Phi_plot = surf(Xint,Yint,Phi);
+% set(hs,'facealpha',0.8)
+% xlabel('x')
+% ylabel('y')
+% title('potential  $$\Phi$$')
+% drawnow
+% 
+% figure(3);
+% Nm_plot = surf(Xint,Yint,Nm);
+% set(Nm_plot,'facealpha',0.8)
+% xlabel('x')
+% ylabel('y')
+% title('N+  $$N+$$')
+% drawnow
