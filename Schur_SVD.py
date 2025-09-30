@@ -5,7 +5,7 @@ from numba import jit
 from sksparse.cholmod import cholesky
 from scipy.sparse import spdiags, eye, kron
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
-from scipy.linalg import qr
+from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
 
@@ -13,11 +13,11 @@ t = time.time()
 
 # Plotting parameters
 plt.rcParams.update({
-    'font.size': 35,
+    'font.size': 12,
     'lines.linewidth': 3,
-    'axes.labelsize': 35,
-    'xtick.labelsize': 35,
-    'ytick.labelsize': 35
+    'axes.labelsize': 12,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12
 })
 
 # Grid setup
@@ -510,10 +510,25 @@ def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
     n_p = -dLap.solve_A(rhs_n_p)
     n_m = -dLap.solve_A(rhs_n_m)
 
-    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).ravel(order='F')) / dl2 # TODO: ask brennan why tf this change fixed my code
+    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).ravel(order='F')) / dl2
     phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
+
+@jit(nopython=True)
+def solve_from_svd(U, Sigma, Vh, rhs):
+    # mask = (Sigma / np.max(Sigma)) > rcond
+    # U_filtered = U[:, mask]
+    # Sigma_filtered = Sigma[mask]
+    # Vh_filtered = Vh[mask, :]
+
+    Sigma_inv_diag = 1 / Sigma
+
+    Sigma_inv = np.diag(Sigma_inv_diag)
+
+    res = Vh.conj().T @ Sigma_inv @ U.T @ rhs
+
+    return res
 
 # Create the operator once
 lap_operator = ConstrainedLapOperator(dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
@@ -567,23 +582,27 @@ ctxt = np.concatenate([
 ])
 
 # Check initial residual
-RHS = b_Op(ctxt)
-err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
-print(f'Initial residual: {err_init}')
+schurRHS = b_Op_Schur(ctxt)
+#computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
+# res1, res2, res3 = apply_Schur(dLap, [Q_init, Q_p_init, Q_m_init], delta_layer)
+# schur_init = np.concatenate([res1, res2, res3])
+# err_init = np.linalg.norm(schur_init - RHS) / np.linalg.norm(RHS)
+# print(f'Initial residual: {err_init}')
+
 
 # Anderson acceleration parameters
-beta = 0.4
+beta = 0.2
 m = 50
-DU = np.full((len(RHS), m), np.nan)
-DG = np.full((len(RHS), m), np.nan)
+DU = np.full((len(schurRHS), m), np.nan)
+DG = np.full((len(schurRHS), m), np.nan)
 
 tol = 1e-4
 u_n = ctxt.copy()
 p_guess = u_n[3*Nx*Ny:]
-RHS = b_Op(ctxt)
-def AxOp_matvec(xx):
-    return AxOp_prev(xx, ctxt)
-AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
+# RHS = b_Op(ctxt)
+# def AxOp_matvec(xx):
+#     return AxOp_prev(xx, ctxt)
+# AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 
 class GMRES_Counter:
     def __init__(self):
@@ -592,15 +611,41 @@ class GMRES_Counter:
     def __call__(self, xk):
         self.niter += 1
 
-# Initial GMRES solve
+# Build dense Schur matrix
 schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
 schurRHS = b_Op_Schur(ctxt)
 computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
-counter = GMRES_Counter()
-p_next, info = gmres(schurOp, computedRHS, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=counter)
-print(f'GMRES converged in {counter.niter} iterations')
-if info != 0:
-    print(f'GMRES warning: convergence info = {info}')
+schurDense = np.zeros((Nib * 3, Nib * 3))
+for col in range(Nib * 3): 
+    eye = np.zeros(Nib * 3)
+    eye[col] = 1
+    p = eye[0:Nib]
+    p_p = eye[Nib:2*Nib]
+    p_m = eye[2*Nib:3*Nib]
+    res_1, res_2, res_3 = apply_Schur(dLap, [p, p_p, p_m], delta_layer)
+    schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
+
+# Compute SVD once
+U, Sigma, Vh = np.linalg.svd(schurDense)
+
+plot_singular = Sigma / np.max(Sigma)
+indices = np.arange(len(plot_singular))
+
+plt.semilogy(indices, plot_singular)
+plt.plot(indices, 1e-3*np.ones(len(plot_singular)))
+plt.xlabel("i")
+plt.ylabel("log(sigma_i/sigma_max)")
+plt.title("Singular Values of Dense Schur Complement Matrix")
+plt.show()
+
+# Use SVD to solve
+p_next = solve_from_svd(U, Sigma, Vh, computedRHS)
+
+#counter = GMRES_Counter()
+#p_next, info = gmres(schurOp, computedRHS, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=counter)
+#print(f'GMRES converged in {counter.niter} iterations')
+#if info != 0:
+#    print(f'GMRES warning: convergence info = {info}')
 G_u_n = post_processing_compute(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer)
 
 u_next = G_u_n.copy()
@@ -611,11 +656,9 @@ err = []
 for its in range(100000):
     schurRHS = b_Op_Schur(u_next)
     computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
-    fresh_counter = GMRES_Counter()
-    p_n, info = gmres(schurOp, computedRHS, rtol=tol, maxiter=1000, restart=500, x0=p_next, callback=fresh_counter)
-    print(f'GMRES converged in {fresh_counter.niter} iterations')
-    if info != 0:
-        print(f'GMRES warning: convergence info = {info}')
+    
+    # Use SVD to solve
+    p_n = solve_from_svd(U, Sigma, Vh, computedRHS)
     G_u_next = post_processing_compute(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer)
 
     # debugging
@@ -625,9 +668,6 @@ for its in range(100000):
     p = G_u_next[3*Nx*Ny:3*Nx*Ny+Nib]
     p_p = G_u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
     p_m = G_u_next[3*Nx*Ny+2*Nib:]
-
-    if info != 0:
-        print(f'GMRES warning at iteration {its}: convergence info = {info}')
 
     m_n = min(m, its + 1)
     
@@ -645,8 +685,9 @@ for its in range(100000):
     DF = DG[:, :m_n] - DU[:, :m_n]
     
     # QR decomposition
-    Q_qr, R_qr = qr(DF, mode='economic')
-    gamma = np.linalg.solve(R_qr, Q_qr.T @ f_n)
+    #Q_qr, R_qr = qr(DF, mode='economic')
+    #gamma = np.linalg.solve(R_qr, Q_qr.T @ f_n)
+    gamma, residuals, rank, s = lstsq(DF, f_n)
     
     u_n = u_next.copy()
     G_u_n = G_u_next.copy()
@@ -664,9 +705,12 @@ for its in range(100000):
     p_next = u_next[3*Nx*Ny:]
     
     # Check convergence
-    RHS = b_Op(u_next)
-    AxOp = AxOp_prev(u_next, u_next)
-    err_curr = np.linalg.norm(AxOp - RHS) / np.linalg.norm(RHS)
+    #RHS = b_Op(u_next)
+    #AxOp = AxOp_prev(u_next, u_next)
+    #err_curr = np.linalg.norm(AxOp - RHS) / np.linalg.norm(RHS)
+    res1, res2, res3 = apply_Schur(dLap, [p, p_p, p_m], delta_layer)
+    schur_next = np.concatenate([res1, res2, res3])
+    err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
     
     err.append(err_curr)
     

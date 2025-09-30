@@ -43,8 +43,8 @@ py::object amrex_finalize() {
 }
 
 py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
-                                  double x_lo = 0.0, double x_hi = 2.0*M_PI,
-                                  double y_lo = 0.0, double y_hi = 2.0*M_PI,
+                                  double x_lo, double x_hi,
+                                  double y_lo, double y_hi,
                                   double tol = 1e-10,
                                   int nghost = 1,
                                   bool fortran_order_rhs = false)
@@ -60,8 +60,8 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
     auto phi_buf = phi_out.request();
 
     // Build AMReX geometry
-    IntVect dom_lo(0,0);
-    IntVect dom_hi(nx-1, ny-1);
+    IntVect dom_lo(0);
+    IntVect dom_hi(nx-1);
     Box domain(dom_lo, dom_hi);
 
     RealBox real_box({AMREX_D_DECL(x_lo, y_lo, 0.0)},
@@ -74,7 +74,7 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
 
     // Single-level BoxArray / DistributionMapping
     BoxArray ba(domain);
-    ba.maxSize(32); // chunking
+    //ba.maxSize(32); // chunking
     DistributionMapping dm(ba);
 
     // MultiFabs
@@ -102,6 +102,7 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
                     size_t idx = static_cast<size_t>(i)*ny + static_cast<size_t>(j);
                     arr(i,j,0) = *(((double*)buf.ptr) + idx);
                 }
+                std::cout << arr(i,j,0) << std::endl;
             }
         }
     }

@@ -1,3 +1,9 @@
+set(0,'defaulttextInterpreter','latex')
+set(0,'defaultAxesTickLabelInterpreter','latex'); 
+set(0,'defaultLegendInterpreter','latex');
+set(0,'defaultLineLineWidth',3);
+set(0,'defaultAxesFontSize',35)
+
 clear;clc;
 
 ld = load('Err_Run_Schur.mat');
@@ -88,7 +94,6 @@ xlim([-pi/6 pi/6]); ylim([-pi/6 pi/6]);
 title('$$\phi$$');
 colormap(slanCM('thermal-2'));
 colorbar; caxis([-3 3]);
-drawnow;
 view(0, 90)
 shading interp
 pbaspect([1 1 1])
