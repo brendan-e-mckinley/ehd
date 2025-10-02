@@ -4,20 +4,20 @@ import time
 from numba import jit
 from sksparse.cholmod import cholesky
 from scipy.sparse import spdiags, eye, kron
-from scipy.sparse.linalg import spsolve, gmres, LinearOperator, splu
-from scipy.linalg import qr
+from scipy.sparse.linalg import spsolve, gmres, LinearOperator
+from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
-from scipy.interpolate import RegularGridInterpolator, Akima1DInterpolator, interpn
+from scipy.interpolate import Akima1DInterpolator, interpn
 
 t = time.time()
 
 # Plotting parameters
 plt.rcParams.update({
-    'font.size': 35,
+    'font.size': 12,
     'lines.linewidth': 3,
-    'axes.labelsize': 35,
-    'xtick.labelsize': 35,
-    'ytick.labelsize': 35
+    'axes.labelsize': 12,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12
 })
 
 # Grid setup
@@ -73,15 +73,15 @@ Npm_BCs[:, -1] += (1/dx/dx) * Npm_exact(X[-1, -1], yint)
 
 RHS = np.zeros_like(Xint)
 
-Test_Phi = spsolve(Lap, RHS.flatten(order='F') - Phi_BCs.flatten(order='F'))
-Test_Npm = spsolve(Lap, RHS.flatten(order='F') - Npm_BCs.flatten(order='F'))
+Test_Phi = spsolve(Lap, RHS.ravel(order='F') - Phi_BCs.ravel(order='F'))
+Test_Npm = spsolve(Lap, RHS.ravel(order='F') - Npm_BCs.ravel(order='F'))
 
-fig = plt.figure(figsize=(15, 6))
-ax1 = fig.add_subplot(121, projection='3d')
-ax1.plot_surface(Xint, Yint, Test_Phi.reshape(Ny, Nx), cmap='turbo')
-ax2 = fig.add_subplot(122, projection='3d')
-ax2.plot_surface(Xint, Yint, Test_Npm.reshape(Ny, Nx), cmap='turbo')
-plt.show()
+# fig = plt.figure(figsize=(15, 6))
+# ax1 = fig.add_subplot(121, projection='3d')
+# ax1.plot_surface(Xint, Yint, Test_Phi.reshape(Ny, Nx), cmap='turbo')
+# ax2 = fig.add_subplot(122, projection='3d')
+# ax2.plot_surface(Xint, Yint, Test_Npm.reshape(Ny, Nx), cmap='turbo')
+# plt.show()
 
 # Make immersed boundary mats
 rad = 0.25
@@ -101,10 +101,20 @@ N_pm_BC = Npm_exact(X, Y)
 
 # Boundary conditions context
 ctxt_BCs = np.concatenate([
-    Phi_BCs.flatten(order='F'),
-    Npm_BCs.flatten(order='F'),
-    Npm_BCs.flatten(order='F'),
+    Phi_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
     np.zeros(len(xib)) - (sigma_bc/delta_layer),
+    np.zeros(len(xib)),
+    np.zeros(len(xib))
+])
+
+# Boundary conditions context for Schur system
+ctxt_BCs_Schur = np.concatenate([
+    Phi_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    np.zeros(len(xib)) - (sigma_bc),
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -280,8 +290,8 @@ def AxOp_prev(ctxt, ctxt_prev):
 def b_Op(ctxt):
     return Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
-def schurOp_prev(p_blocks):
-    return apply_Schur(dLap, p_blocks, delta_layer)
+def b_Op_Schur(ctxt):
+    return Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
@@ -301,7 +311,7 @@ def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     N_pm_x = (0.5/dx) * (N_pm_BC_x[:, 2:] - N_pm_BC_x[:, :-2])
 
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
-    return G_d_G.flatten(order='F')
+    return G_d_G.ravel(order='F')
 
 def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
     A_x_Ctx = np.zeros_like(ctxt)
@@ -321,9 +331,9 @@ def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, 
     
     dl2 = delta_layer**2
 
-    A_x_Ctx[:sz] = dl2 * Phi - dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.flatten(order='F'))
-    A_x_Ctx[sz:2*sz] = N_p - dLap.solve_A(SQ_p.flatten(order='F'))
-    A_x_Ctx[2*sz:3*sz] = N_m - dLap.solve_A(SQ_m.flatten(order='F'))
+    A_x_Ctx[:sz] = dl2 * Phi - dLap.solve_A(0.5*N_p - 0.5*N_m + SQ.ravel(order='F'))
+    A_x_Ctx[sz:2*sz] = N_p - dLap.solve_A(SQ_p.ravel(order='F'))
+    A_x_Ctx[2*sz:3*sz] = N_m - dLap.solve_A(SQ_m.ravel(order='F'))
     A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
@@ -338,10 +348,15 @@ def apply_Schur(dLap, p_blocks, delta_layer):
     Bp_p = Sop_prime(p_p)
     Bp_m = Sop_prime(p_m)
 
+    Bp_flat = Bp.ravel(order='F')
+    Bp_p_flat = Bp_p.ravel(order='F')
+    Bp_m_flat = Bp_m.ravel(order='F')
+
     # apply A inverse 
-    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp, Bp_p, Bp_m], delta_layer)
+    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv(dLap, [Bp_flat, Bp_p_flat, Bp_m_flat], delta_layer)
 
     # apply C 
+    # res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F'))
     res_1 = delta_layer * Jop_prime(Ainv_Bp.reshape(Ny, Nx, order='F'))
     res_2 = Jop_prime(Ainv_Bp_p.reshape(Ny, Nx, order='F'))
     res_3 = Jop_prime(Ainv_Bp_m.reshape(Ny, Nx, order='F'))
@@ -354,11 +369,11 @@ def apply_Ainv(dLap, target_vec, delta_layer):
     dl2 = delta_layer**2
 
     # second and third blocks are straightforward
-    result_vec_2 = -dLap.solve_A(target_vec_2.flatten(order='F'))
-    result_vec_3 = -dLap.solve_A(target_vec_3.flatten(order='F'))
+    result_vec_2 = -dLap.solve_A(target_vec_2.ravel(order='F'))
+    result_vec_3 = -dLap.solve_A(target_vec_3.ravel(order='F'))
 
     # use these results to compute first block 
-    rhs = target_vec_1.flatten(order='F') + 0.5 * result_vec_2 - 0.5 * result_vec_3
+    rhs = target_vec_1.ravel(order='F') - 0.5 * result_vec_2 + 0.5 * result_vec_3
     result_vec_1 = -dLap.solve_A(rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
@@ -387,6 +402,36 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, J
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
     b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
     b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
+    b_Ctx[q_i:q_i+Nib] = Q_BC
+    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    
+    return b_Ctx
+
+def Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny
+    q_i = 3 * sz
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+    
+    dl2 = delta_layer**2
+    
+    computed_lap = (-Lap) @ Phi
+    computed_lap = computed_lap + Phi_BC
+
+    b_Ctx[:sz] =  -dl2 * Phi_BC
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p)
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m)
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -459,16 +504,31 @@ def post_processing_compute(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer):
     dl2 = delta_layer**2
 
     # get rhs for what we already know how to solve
-    rhs_n_p = rhs_2 - Sop_prime(p_p).flatten(order='F')
-    rhs_n_m = rhs_3 - Sop_prime(p_m).flatten(order='F')
+    rhs_n_p = rhs_2 - Sop_prime(p_p).ravel(order='F')
+    rhs_n_m = rhs_3 - Sop_prime(p_m).ravel(order='F')
 
     n_p = -dLap.solve_A(rhs_n_p)
     n_m = -dLap.solve_A(rhs_n_m)
 
-    rhs_phi = (rhs_1 + 0.5*n_p - 0.5*n_m - Sop_prime(p).flatten(order='F')) / dl2
+    rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).ravel(order='F')) / dl2
     phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
+
+@jit(nopython=True)
+def solve_from_svd(U, Sigma, Vh, rhs):
+    # mask = (Sigma / np.max(Sigma)) > rcond
+    # U_filtered = U[:, mask]
+    # Sigma_filtered = Sigma[mask]
+    # Vh_filtered = Vh[mask, :]
+
+    Sigma_inv_diag = 1 / Sigma
+
+    Sigma_inv = np.diag(Sigma_inv_diag)
+
+    res = Vh.conj().T @ Sigma_inv @ U.T @ rhs
+
+    return res
 
 # Create the operator once
 lap_operator = ConstrainedLapOperator(dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
@@ -482,7 +542,7 @@ Nx_ld = int(ld['Nx'][0, 0])
 Nib_ld = int(ld['Nib'][0, 0])
 sz = Ny_ld * Nx_ld
 
-ctxt_ld = ld['ctxt'].flatten(order='F')
+ctxt_ld = ld['ctxt'].ravel(order='F')
 Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')  # Important: use Fortran order
 N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
 N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
@@ -492,191 +552,276 @@ Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
-theta_ld = ld['theta'].flatten()
+theta_ld = ld['theta'].ravel()
 
 # Extract the coordinate vectors from the loaded grid
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-ldData = loadmat('data.mat')
-Phi_init = ldData['Phi_init']
-N_p_init = ldData['N_p_init']
-N_m_init = ldData['N_m_init']
+# Identical data to MATLAB code
+# ldData = loadmat('data.mat')
+# Phi_init = ldData['Phi_init']
+# N_p_init = ldData['N_p_init']
+# N_m_init = ldData['N_m_init']
 
-#Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
-
-#N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-#N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-
-#N_p_init_f = RegularGridInterpolator((x_ld, y_ld), N_p_ld, 
-#                                    method=METHOD, bounds_error=False, fill_value=None)
-#N_m_init_f = RegularGridInterpolator((x_ld, y_ld), N_m_ld, 
-#                                    method=METHOD, bounds_error=False, fill_value=None)
-
-#points_new = np.column_stack([Xint.flatten(order='F'), Yint.flatten(order='F')])
-
-#N_p_init = N_p_init_f(points_new).reshape(Ny, Nx)
-#N_m_init = N_m_init_f(points_new).reshape(Ny, Nx)
-
-# Interpolate boundary quantities
+# Interpolate initial guesses
+Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
 Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
 Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
 ctxt = np.concatenate([
-    Phi_init.flatten(order='F'),
-    N_p_init.flatten(order='F'),
-    N_m_init.flatten(order='F'),
+    Phi_init.ravel(order='F'),
+    N_p_init.ravel(order='F'),
+    N_m_init.ravel(order='F'),
     Q_init,
     Q_p_init,
     Q_m_init
 ])
 
 # Check initial residual
-RHS = b_Op(ctxt)
-err_init = np.linalg.norm(AxOp_prev(ctxt, ctxt) - RHS) / np.linalg.norm(RHS)
-print(f'Initial residual: {err_init}')
+schurRHS = b_Op_Schur(ctxt)
+#computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
+# res1, res2, res3 = apply_Schur(dLap, [Q_init, Q_p_init, Q_m_init], delta_layer)
+# schur_init = np.concatenate([res1, res2, res3])
+# err_init = np.linalg.norm(schur_init - RHS) / np.linalg.norm(RHS)
+# print(f'Initial residual: {err_init}')
+
 
 # Anderson acceleration parameters
 beta = 0.2
 m = 50
-DU = np.full((len(RHS), m), np.nan)
-DG = np.full((len(RHS), m), np.nan)
+DU = np.full((len(schurRHS), m), np.nan)
+DG = np.full((len(schurRHS), m), np.nan)
 
-tol = 1e-5
+tol = 1e-4
 u_n = ctxt.copy()
-
-def AxOp_matvec(xx):
-    return AxOp_prev(xx, ctxt)
-AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
-
-RHS_schur = schur_rhs(dLap, RHS, Nx, Ny, Nib, delta_layer)
 p_guess = u_n[3*Nx*Ny:]
+# RHS = b_Op(ctxt)
+# def AxOp_matvec(xx):
+#     return AxOp_prev(xx, ctxt)
+# AxOp = LinearOperator((len(RHS), len(RHS)), matvec=AxOp_matvec)
 
-schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
+class GMRES_Counter:
+    def __init__(self):
+        self.niter = 0
 
-lap_operator.set_context(ctxt)
-AxOp = LinearOperator((len(RHS), len(RHS)), matvec=lap_operator.matvec)
+    def __call__(self, xk):
+        self.niter += 1
 
-# Initial GMRES solve
-p_next, info = gmres(schurOp, RHS_schur, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
-if info != 0:
-    print(f'GMRES warning: convergence info = {info}')
+# Build dense Schur matrix
+# schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
+# schurRHS = b_Op_Schur(ctxt)
+# computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
+# schurDense = np.zeros((Nib * 3, Nib * 3))
+# for col in range(Nib * 3): 
+#     eye = np.zeros(Nib * 3)
+#     eye[col] = 1
+#     p = eye[0:Nib]
+#     p_p = eye[Nib:2*Nib]
+#     p_m = eye[2*Nib:3*Nib]
+#     res_1, res_2, res_3 = apply_Schur(dLap, [p, p_p, p_m], delta_layer)
+#     schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
 
-G_u_n = post_processing_compute(dLap, p_next, RHS, Nx, Ny, Nib, delta_layer)
+dist_list = []
+f_list = []
+g_list = []
+
+# for i in range(Nib):
+#     for j in range(Nib):
+#         R_i = np.concatenate(xib[i], yib[i])
+#         R_j = np.concatenate(xib[j], yib[j])
+#         R_ij = R_i - R_j
+#         R_ij_distance = np.sqrt(R_ij[0]**2 + R_ij[1]**2)
+#         R_ij_perp = np.concatenate(-R_ij[1], R_ij[0])
+#         dist_list.append(R_ij_distance)
+        
+#         g_R_ij_distance = R_ij_perp.T @ schur_dense
+#         g_list.append()
+
+# Choose an arbitrary i and j
+#R_i = np.array([xib[2], yib[2]])
+#R_i_tiled = np.tile(R_i, 3)
+#R_j = np.array([xib[86], yib[86]])
+#R_j_tiled = np.tile(R_j, 3)
+#R_ij = R_i_tiled - R_j_tiled
+#R_ij = R_i - R_j
+#R_ij_distance = np.sqrt(R_ij[0]**2 + R_ij[1]**2)
+#R_ij_perp = np.array([-R_ij, R_ij])
+
+# Choose an arbitrary i and j
+#p_i = np.zeros(Nib)
+#p_i[2] = 1
+
+#p_j = np.zeros(Nib)
+#p_j[86] = 1
+
+#p_ij = p_i - p_j
+#p_ij_tiled = np.tile(p_ij, 3)
+
+for i in range(0, Nib, 4):
+    for j in range(0, Nib, 4):
+        R_i = np.array([xib[i], yib[i]])
+        R_j = np.array([xib[j], yib[j]])
+        R_ij = R_i - R_j
+        R_ij_distance = np.sqrt(R_ij[0]**2 + R_ij[1]**2)
+        dist_list.append(R_ij_distance)
+
+        p_i = np.zeros(Nib)
+        p_i_perp = np.zeros(Nib)
+        p_i[i] = 1
+        p_i_perp[i] = 1
+
+        p_j = np.zeros(Nib)
+        p_j_perp = np.zeros(Nib)
+        p_j[j] = 1
+        p_j_perp[j] = -1
+
+        p_ij = p_i - p_j
+        p_ij_perp = p_i_perp - p_j_perp
+        #p_ij = p_ij / np.linalg.norm(p_ij)
+        p_ij_tiled = np.tile(p_ij, 3)
+        p_ij_perp_tiled = np.tile(p_ij_perp, 3)
+
+        # res_1, res_2, res_3 = apply_Schur(dLap, [p_ij, p_ij, p_ij], delta_layer)
+        # schurApplied = np.concatenate([res_1, res_2, res_3])
+        # f_ij = p_ij_tiled.T @ schurApplied
+        
+        res_1, res_2, res_3 = apply_Schur(dLap, [p_ij_perp, p_ij_perp, p_ij_perp], delta_layer)
+        schurApplied = np.concatenate([res_1, res_2, res_3])
+        g_ij = p_ij_perp_tiled.T @ schurApplied
+
+        g_list.append(g_ij)
+        #f_list.append(f_ij)
+
+plt.plot(dist_list, g_list)
+plt.show()
+
+# # Compute SVD once
+# U, Sigma, Vh = np.linalg.svd(schurDense)
+
+# plot_singular = Sigma / np.max(Sigma)
+# indices = np.arange(len(plot_singular))
+
+# plt.semilogy(indices, plot_singular)
+# plt.plot(indices, 1e-3*np.ones(len(plot_singular)))
+# plt.xlabel("i")
+# plt.ylabel("log(sigma_i/sigma_max)")
+# plt.title("Singular Values of Dense Schur Complement Matrix")
+# plt.show()
+
+# # Use SVD to solve
+# p_next = solve_from_svd(U, Sigma, Vh, computedRHS)
+
+#counter = GMRES_Counter()
+#p_next, info = gmres(schurOp, computedRHS, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=counter)
+#print(f'GMRES converged in {counter.niter} iterations')
+#if info != 0:
+#    print(f'GMRES warning: convergence info = {info}')
+G_u_n = post_processing_compute(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer)
+
 u_next = G_u_n.copy()
 G_u_next = G_u_n.copy()
 err = []
 
-p_guess = u_next[3*Nx*Ny:]
-
-res = b_Op(u_exact) - lap_operator.matvec(u_exact)
-print(np.linalg.norm(res))
-
 # Anderson acceleration loop
-# for its in range(100000):
-#     RHS = b_Op(u_next)
-#     lap_operator.set_context(u_next)  # Update the context
-
-#     RHS_schur = schur_rhs(dLap, RHS, Nx, Ny, Nib, delta_layer)
-#     lap_operator.set_context(u_next)  # Update the context
-#     schurOp = SchurLinearOperator(dLap, Nib*3, Nib, delta_layer)
-
-#     p_next, info = gmres(schurOp, RHS_schur, rtol=tol, maxiter=1000, restart=500, x0=p_guess, callback=lambda x: print(f"GMRES residual: {np.linalg.norm(x)}"))
-#     if info != 0:
-#         print(f'GMRES warning: convergence info = {info}')
-
-#     G_u_next = post_processing_compute(dLap, p_next, RHS, Nx, Ny, Nib, delta_layer)
-
-#     # debugging
-#     phi = G_u_next[:Nx*Ny]
-#     n_p = G_u_next[Nx*Ny:2*Nx*Ny]
-#     n_m = G_u_next[2*Nx*Ny:3*Nx*Ny]
-#     p = G_u_next[3*Nx*Ny:3*Nx*Ny+Nib]
-#     p_p = G_u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
-#     p_m = G_u_next[3*Nx*Ny+2*Nib:]
-
-#     m_n = min(m, its + 1)
+for its in range(100000):
+    schurRHS = b_Op_Schur(u_next)
+    computedRHS = schur_rhs(dLap, schurRHS, Nx, Ny, Nib, delta_layer)
     
-#     # Store differences
-#     if its < m:
-#         DU[:, its] = u_next - u_n
-#         DG[:, its] = G_u_next - G_u_n
-#     else:
-#         DU = np.roll(DU, -1, axis=1)
-#         DG = np.roll(DG, -1, axis=1)
-#         DU[:, -1] = u_next - u_n
-#         DG[:, -1] = G_u_next - G_u_n
-    
-#     f_n = G_u_next - u_next
-#     DF = DG[:, :m_n] - DU[:, :m_n]
-    
-#     # QR decomposition
-#     Q_qr, R_qr = qr(DF, mode='economic')
-#     gamma = np.linalg.solve(R_qr, Q_qr.T @ f_n)
-    
-#     u_n = u_next.copy()
-#     G_u_n = G_u_next.copy()
-    
-#     u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
-    
-#     # Extract solution components
-#     Phi = u_next[:Ny*Nx].reshape(Ny, Nx, order='F')
-#     Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx, order='F')
-#     Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx, order='F')
-    
-#     p_next = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
-#     p_p_next = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
-#     p_m_next = u_next[3*Nx*Ny+2*Nib:]
+    # Use SVD to solve
+    p_n = solve_from_svd(U, Sigma, Vh, computedRHS)
+    G_u_next = post_processing_compute(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer)
 
-#     err_res_1, err_res_2, err_res_3 = apply_Schur(
-#         dLap, [p_next, p_p_next, p_m_next], delta_layer
-#     )
+    # debugging
+    phi = G_u_next[:Nx*Ny]
+    n_p = G_u_next[Nx*Ny:2*Nx*Ny]
+    n_m = G_u_next[2*Nx*Ny:3*Nx*Ny]
+    p = G_u_next[3*Nx*Ny:3*Nx*Ny+Nib]
+    p_p = G_u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+    p_m = G_u_next[3*Nx*Ny+2*Nib:]
 
-#     # update guess and RHS 
-#     RHS = b_Op(u_next)
-#     p_guess = u_next[3*Nx*Ny:]
-
-#     # Check convergence
-#     diff = np.linalg.norm(u_next - u_prev) / np.linalg.norm(u_prev)
-
-#     res = b_Op(u_next) - lap_operator.matvec(u_next)
-#     rel_res = np.linalg.norm(res) / np.linalg.norm(b_Op(u_next))
+    m_n = min(m, its + 1)
     
-#     print(f'Iteration {its}: diff = {diff}')
-#     print(f'Iteration {its}: rel_res = {rel_res}')
+    # Store differences
+    if its < m:
+        DU[:, its] = u_next - u_n
+        DG[:, its] = G_u_next - G_u_n
+    else:
+        DU = np.roll(DU, -1, axis=1)
+        DG = np.roll(DG, -1, axis=1)
+        DU[:, -1] = u_next - u_n
+        DG[:, -1] = G_u_next - G_u_n
     
-#     # Plot current solution
-#     # if its % 10 == 0:  # Plot every 10 iterations
-#     #     plt.clf()
-#     #     fig = plt.figure(figsize=(10, 8))
-#     #     ax = fig.add_subplot(111, projection='3d')
-#     #     surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
-#     #     ax.set_xlabel('x')
-#     #     ax.set_ylabel('y')
-#     #     ax.set_title(r'$N_+$')
-#     #     plt.pause(0.01)
+    f_n = G_u_next - u_next
+    DF = DG[:, :m_n] - DU[:, :m_n]
+    
+    # QR decomposition
+    #Q_qr, R_qr = qr(DF, mode='economic')
+    #gamma = np.linalg.solve(R_qr, Q_qr.T @ f_n)
+    gamma, residuals, rank, s = lstsq(DF, f_n)
+    
+    u_n = u_next.copy()
+    G_u_n = G_u_next.copy()
+    
+    u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
+    
+    # Extract solution components
+    Phi = u_next[:Ny*Nx].reshape(Ny, Nx)
+    Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx)
+    Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx)
+    p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
+    p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+    p_m = u_next[3*Nx*Ny+2*Nib:]
 
-#     #break
+    p_next = u_next[3*Nx*Ny:]
+    
+    # Check convergence
+    #RHS = b_Op(u_next)
+    #AxOp = AxOp_prev(u_next, u_next)
+    #err_curr = np.linalg.norm(AxOp - RHS) / np.linalg.norm(RHS)
+    res1, res2, res3 = apply_Schur(dLap, [p, p_p, p_m], delta_layer)
+    schur_next = np.concatenate([res1, res2, res3])
+    err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
+    
+    err.append(err_curr)
+    
+    print(f'Iteration {its}: residual = {err_curr}')
+    
+    if err_curr < 1e-4:
+        print('Converged!')
+        break
+
+plt.clf()
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+surf = ax.plot_surface(Xint, Yint, Np, cmap='turbo', alpha=0.8)
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_title(r'$N_+$')
+plt.pause(0.01)
 
 ctxt_final = u_next.copy()
 
+elapsed = time.time() - t
+
 # Save results
-savemat('Err_Run_N_450.mat', {
-    'ctxt': ctxt_final,
-    'u_next': u_next,
-    'Xint': Xint,
-    'Yint': Yint,
-    'xib': xib,
-    'yib': yib,
-    'Phi': Phi,
-    'Np': Np,
-    'Nm': Nm,
-    'err': np.array(err)
-})
+# savemat('Err_Run_Schur.mat', {
+#     'ctxt': ctxt_final,
+#     'u_next': u_next,
+#     'Xint': Xint,
+#     'Yint': Yint,
+#     'xib': xib,
+#     'yib': yib,
+#     'Phi': Phi,
+#     'Np': Np,
+#     'Nm': Nm,
+#     'err': np.array(err),
+#     'time': elapsed
+# })
 
 print("Computation completed and results saved!")
-
-elapsed = time.time() - t
 
 print(f'Elapsed time: {elapsed}')
