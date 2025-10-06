@@ -44,28 +44,17 @@ def interpPhi(X, Y, xq, yq, Phi, delta):
 
     return Jphi
 
-L = 1.0
-rad = 0.25
 size = 5
-
 size_range = range(size)
 N = np.zeros(size)
 for s in size_range:
-    N[s] = 15*(size_range[s] + 1)
-
-# compute Nib_max
-Nx_max = int(N[-1])
-x_max = np.linspace(0, L, Nx_max + 1)
-dx_max = x_max[1] - x_max[0]
-dth_max = dx_max / rad
-theta_max = np.arange(0, 2*np.pi - dth_max, dth_max)
-Nib_max = len(theta_max)
+    N[s] = 32 + 5 * (size_range[s] + 1)
 
 def compute_U(xx, yy):
     return np.sin(2*np.pi*yy) * np.sin(2*np.pi*xx)
 
 def compute_V(xx, yy):
-    return -3.5 + np.cos(2*np.pi*xx) * (np.cos(2*np.pi*yy) - 1)
+    return np.cos(2*np.pi*xx) * (np.cos(2*np.pi*yy) - 1)
 
 def compute_P(xx, yy):
     return np.sin(2*np.pi*yy) * np.cos(2*np.pi*xx)
@@ -76,13 +65,12 @@ PNumericalList = np.zeros((int(N[-1] * N[-1]), size))
 PExactList = np.zeros((int(N[-1] * N[-1]), size))
 VNumericalList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
 VExactList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
-LamNumericalList = np.zeros((int(Nib_max), size))
-LamExactList = np.ones((int(Nib_max), size))
 
 for k in size_range:
     # Parameters
     Nx = int(N[k])
     Ny = Nx
+    L = 1.0
     x = np.linspace(0, L, Nx + 1)
     dx = x[1] - x[0]
     dx2 = dx**2
@@ -90,6 +78,7 @@ for k in size_range:
     dy = dx
 
     # IB
+    rad = 0.25
     dth = dx / rad
     theta = np.arange(0, 2*np.pi - dth, dth)
     Nib = len(theta)
@@ -129,7 +118,6 @@ for k in size_range:
         return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
 
     def compute_g(xx, yy):
-        #return -4 * np.pi**2 * np.cos(2*np.pi*xx) * (2*np.cos(2*np.pi*yy) - 1) - 2 * np.pi * np.cos(2*np.pi*yy) * np.cos(2*np.pi*xx)
         return -4 * np.pi**2 * np.cos(2*np.pi*xx) * (2 * np.cos(2*np.pi*yy) - 1) - 2 * np.pi * np.cos(2*np.pi*yy) * np.cos(2*np.pi*xx)
 
     for j in range(Ny):
@@ -145,24 +133,13 @@ for k in size_range:
 
     for j in range(Nib):
         z[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_r) + interpPhi(VGridX, VGridY, xib, yib, VExact, delta_r)
-
-    # BCs
-    V_lower = -3.5
-    V_upper = -3.5
-
+        
     f_bc_mat = np.zeros((Ny, Nx))
     g_bc_mat = np.zeros((Ny_minus, Nx))
     h_bc_mat = np.zeros((Ny, Nx))
 
-    # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
     f_bc = f.ravel(order='F') + spreadQ(UGridX, UGridY, xib, yib, lam_exact, delta_r) + f_bc_mat.ravel(order='F')
-
-    g_bc_mat[0, :] = -V_lower / dy**2
-    g_bc_mat[-1, :] = -V_upper / dy**2
     g_bc = g.ravel(order='F') + spreadQ(VGridX, VGridY, xib, yib, lam_exact, delta_r) + g_bc_mat.ravel(order='F')
-
-    h_bc_mat[0, :] = V_lower / dy
-    h_bc_mat[-1, :] = -V_upper / dy
     h_bc = h_bc_mat.ravel(order='F')
 
     # 1-D operators
@@ -189,13 +166,26 @@ for k in size_range:
     Lap_V = kron(D2_x, eye(Ny_minus, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_V, format='csr')
 
     # Gradients
-    Dx_f = diags([-np.ones(Nx), np.ones(Nx)], offsets=[0, 1], shape=(Nx, Nx), format='lil')
-    Dx_f[-1, 0] = 1.0
-    D_x_forward = (Dx_f / dx).tocsr()
-    G_x = kron(D_x_forward, eye(Ny, format='csr'), format='csr')
+    e = np.ones(Nx)
+    Dx_c = diags([-0.5*e, 0*e, 0.5*e], offsets=[-1,0,1], shape=(Nx, Nx), format='lil')
+    Dx_c[0, -1] = -0.5
+    Dx_c[-1, 0]  =  0.5
+    D_x_centered = (Dx_c / dx).tocsr()
+    G_x = kron(D_x_centered, eye(Ny, format='csr'), format='csr')
 
-    D_y_small = diags([-np.ones(Ny_minus), np.ones(Ny_minus)], offsets=[0, 1], shape=(Ny_minus, Ny), format='csr') / dy
+    #plt.spy(G_x)
+    #plt.show()
+
+    ey = np.ones(Ny)
+    D_y_small = diags([-0.5*ey, 0.5*ey], offsets=[-1, 1],
+                    shape=(Ny_minus, Ny), format='lil')
+
+    D_y_small = (D_y_small / dy).tocsr()
+
     G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
+
+    #plt.spy(G_y)
+    #plt.show()
 
     # Divergence (note signs)
     D_x = -G_x.transpose()
@@ -260,13 +250,12 @@ for k in size_range:
     P = sol[N_U + N_V:N_U + N_V + N_U]
     lam = sol[N_U + N_V + N_U:]
 
-    P = P - np.mean(P)
+    #P = P - np.mean(P)
 
     # Append to solution array 
     UNumericalList[0:Nx**2, k] = U
     VNumericalList[0:Nx * (Ny - 1), k] = V
     PNumericalList[0:Nx**2, k] = P
-    LamNumericalList[0:Nib, k] = lam
     UExactList[0:Nx**2, k] = UExact.ravel(order='F')
     VExactList[0:Nx * (Ny - 1), k] = VExact.ravel(order='F')
     PExactList[0:Nx**2, k] = PExact.ravel(order='F')
@@ -282,7 +271,7 @@ for k in size_range:
     UFull[0, :] = UFull[1, :]
     UFull[-1, :] = UFull[-2, :]
 
-    VFull = V_lower * np.ones((Ny + 2, Nx + 2))
+    VFull = np.zeros((Ny + 2, Nx + 2))
     VFull[1:Ny, 1:Nx + 1] = Vplot
     VFull[:,0] = VFull[:,1]
     VFull[:,-1] = VFull[:,-2]
@@ -291,12 +280,12 @@ for k in size_range:
 err2Norm_U = np.zeros(size)
 err2Norm_V = np.zeros(size)
 err2Norm_P = np.zeros(size)
-err2Norm_Lam = np.zeros(size)
+second_order = np.zeros(size)
 for i in size_range:
     err2Norm_U[i] = np.linalg.norm(UExactList[0:int(N[i]**2), i] - UNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(UExactList[0:int(N[i]**2),i], ord=2)
     err2Norm_V[i] = np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)), i] - VNumericalList[0:int(N[i]*(N[i]-1)), i], ord=2) / np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)),i], ord=2)
     err2Norm_P[i] = np.linalg.norm(PExactList[0:int(N[i]**2), i] - PNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(PExactList[0:int(N[i]**2),i], ord=2)
-    err2Norm_Lam[i] = np.linalg.norm(LamExactList[0:int(Nib), i] - LamNumericalList[0:int(Nib), i], ord=2) / np.linalg.norm(LamExactList[0:int(Nib), i], ord=2)
+    second_order[i] = 10**(-i)
 
 h = 1.0 / N
 def rates(err):
@@ -310,11 +299,10 @@ print("V rates:", rates(err2Norm_V))
 print("P rates:", rates(err2Norm_P))
 
 plt.figure(figsize=(6,5))
-plt.loglog(N, err2Norm_U, '--o', label=r'$Err_U$')
-plt.loglog(N, err2Norm_V, '--o', label=r'$Err_V$')
-plt.loglog(N, err2Norm_P, '--o', label=r'$Err_P$')
-plt.loglog(N, err2Norm_Lam, '--o', label=r'$Err_\lambda$')
-plt.loglog(N, h**2 * .1, '--', label='2nd order')
+plt.loglog(N, err2Norm_U, '--o', label=r'$Err$')
+plt.loglog(N, second_order, '--o', label=r'$Second-Order$')
+plt.loglog(N, err2Norm_V, '--o', label=r'$Err$')
+plt.loglog(N, err2Norm_P, '--o', label=r'$Err$')
 
 plt.xlabel(r'$N$', fontsize=22)
 plt.ylabel(r'$Err$', fontsize=22)
@@ -343,12 +331,6 @@ fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
 ax.plot_surface(Xplot, Yplot, VFull, cmap=cmap, edgecolor='none')
 ax.set_title("V")
-ax.set_xlabel("x"); ax.set_ylabel("y")
-
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(Xplot, Yplot, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
-ax.set_title("|velocity|")
 ax.set_xlabel("x"); ax.set_ylabel("y")
 
 plt.show()
