@@ -44,11 +44,11 @@ def interpPhi(X, Y, xq, yq, Phi, delta):
 
     return Jphi
 
-size = 1
+size = 3
 size_range = range(size)
 N = np.zeros(size)
 for s in size_range:
-    N[s] = 64*(size_range[s] + 1)
+    N[s] = 15*(size_range[s] + 1)
 
 def compute_U(xx, yy):
     return np.sin(2*np.pi*yy) * np.sin(2*np.pi*xx)
@@ -82,8 +82,8 @@ for k in size_range:
     dth = dx / rad
     theta = np.arange(0, 2*np.pi - dth, dth)
     Nib = len(theta)
-    xib = rad * np.cos(theta) 
-    yib = rad * np.sin(theta)
+    xib = 0.5 + rad * np.cos(theta) 
+    yib = 0.5 + rad * np.sin(theta)
     n_x = np.cos(theta)
     n_y = np.sin(theta)
 
@@ -94,6 +94,9 @@ for k in size_range:
     y_j_offset = yint + dy
     y_j_V = y_j_offset[1:]
 
+    UGridX, UGridY = np.meshgrid(xint, y_j_U)
+    VGridX, VGridY = np.meshgrid(x_i_V, y_j_V)
+
     N_U = Nx * Ny
     Ny_minus = Ny - 1
     N_V = Nx * Ny_minus
@@ -103,11 +106,13 @@ for k in size_range:
     f = np.zeros((Ny, Nx))
     g = np.zeros((Ny_minus, Nx))
     h = np.zeros((Ny, Nx))
+    z = np.zeros(Nib)
 
     # Analytic solutions
     UExact = np.zeros((Ny, Nx))
     VExact = np.zeros((Ny_minus, Nx))
     PExact = np.zeros((Ny, Nx))
+    lam_exact = np.ones(Nib)
 
     def compute_f(xx, yy):
         return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
@@ -127,6 +132,9 @@ for k in size_range:
             g[j, i] = compute_g(x_i_V[i], yint[j] + dy)
             VExact[j, i] = compute_V(x_i_V[i], yint[j] + dy)
 
+    for j in range(Nib):
+        z[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_r) + interpPhi(VGridX, VGridY, xib, yib, VExact, delta_r)
+
     # BCs
     V_lower = -3.5
     V_upper = -3.5
@@ -136,11 +144,11 @@ for k in size_range:
     h_bc_mat = np.zeros((Ny, Nx))
 
     # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
-    f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
+    f_bc = f.ravel(order='F') + spreadQ(UGridX, UGridY, xib, yib, lam_exact, delta_r) + f_bc_mat.ravel(order='F')
 
     g_bc_mat[0, :] = -V_lower / dy**2
     g_bc_mat[-1, :] = -V_upper / dy**2
-    g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
+    g_bc = g.ravel(order='F') + spreadQ(VGridX, VGridY, xib, yib, lam_exact, delta_r) + g_bc_mat.ravel(order='F')
 
     h_bc_mat[0, :] = V_lower / dy
     h_bc_mat[-1, :] = -V_upper / dy
@@ -200,22 +208,21 @@ for k in size_range:
 
     # build dense S matrices
     for ib in range(Nib):
-        eye = np.zeros(Nib)
-        eye[ib] = 1
-        spreadArr = spreadQ(xint, y_j_U, xib, yib, eye, delta_r)
-        S_U[ib,:] = spreadQ(xint, y_j_U, xib, yib, eye, delta_r)
-        S_V[ib,:] = spreadQ(x_i_V, y_j_V, xib, yib, eye, delta_r)
+        one_hot = np.zeros(Nib)
+        one_hot[ib] = 1
+        S_U[:,ib] = spreadQ(UGridX, UGridY, xib, yib, one_hot, delta_r)
+        S_V[:,ib] = spreadQ(VGridX, VGridY, xib, yib, one_hot, delta_r)
 
     # build dense J matrices
-    for k in range(N_U):
-        eye = np.zeros(N_U)
-        eye[k] = 1
-        J_U[:,k] = interpPhi(xint, y_j_U, xib, yib, eye, delta_r)
+    for it in range(N_U):
+        one_hot = np.zeros(N_U)
+        one_hot[it] = 1
+        J_U[:,it] = interpPhi(UGridX, UGridY, xib, yib, one_hot, delta_r)
 
-    for k in range(N_V):
-        eye = np.zeros(N_V)
-        eye[k] = 1
-        J_V[:,k] = interpPhi(x_i_V, y_j_V, xib, yib, eye, delta_r)
+    for it in range(N_V):
+        one_hot = np.zeros(N_V)
+        one_hot[it] = 1
+        J_V[:,it] = interpPhi(VGridX, VGridY, xib, yib, one_hot, delta_r)
 
     for j in range(Ny_minus):
         for i in range(Nx):
@@ -226,12 +233,12 @@ for k in size_range:
     A = bmat([
         [Lap_U,                  Z_UV,            -G_x,             S_U],
         [Z_VU,                   Lap_V,           -G_y,             S_V],
-        [D_x,                    D_y,             Z_PU,             Z_NibP],
-        [J_U,                    J_V,             Z_PNib,           Z_NibNib] 
+        [D_x,                    D_y,             Z_PU,             Z_PNib],
+        [J_U,                    J_V,             Z_NibP,           Z_NibNib] 
     ], format='csr')
 
     # RHS vector (Fortran order flattening already done)
-    RHS = np.concatenate([f_bc, g_bc, h_bc])
+    RHS = np.concatenate([f_bc, g_bc, h_bc, z])
 
     # Solve
     sol = spsolve(A, RHS)
@@ -239,7 +246,8 @@ for k in size_range:
     # Split (no change in ordering of partition)
     U = sol[:N_U]
     V = sol[N_U:N_U + N_V]
-    P = sol[N_U + N_V:]
+    P = sol[N_U + N_V:N_U + N_V + N_U]
+    lam = sol[N_U + N_V + N_U:]
 
     P = P - np.mean(P)
 
