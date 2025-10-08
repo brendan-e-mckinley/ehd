@@ -46,12 +46,12 @@ def interpPhi(X, Y, xq, yq, Phi, delta):
 
 L = 1.0
 rad = 0.25
-size = 5
+size = 4
 
 size_range = range(size)
 N = np.zeros(size)
 for s in size_range:
-    N[s] = 15*(size_range[s] + 1)
+    N[s] = 15*(size_range[s] + 2)
 
 # compute Nib_max
 Nx_max = int(N[-1])
@@ -76,8 +76,10 @@ PNumericalList = np.zeros((int(N[-1] * N[-1]), size))
 PExactList = np.zeros((int(N[-1] * N[-1]), size))
 VNumericalList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
 VExactList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
-LamNumericalList = np.zeros((int(Nib_max), size))
-LamExactList = np.ones((int(Nib_max), size))
+Lam_X_NumericalList = np.zeros((int(Nib_max), size))
+Lam_X_ExactList = np.ones((int(Nib_max), size))
+Lam_Y_NumericalList = np.zeros((int(Nib_max), size))
+Lam_Y_ExactList = np.ones((int(Nib_max), size))
 
 for k in size_range:
     # Parameters
@@ -98,15 +100,15 @@ for k in size_range:
     n_x = np.cos(theta)
     n_y = np.sin(theta)
 
-    xint = x[:-1]    # length Nx
-    yint = y[:-1]    # length Ny
-    y_j_U = yint + dx / 2
-    x_i_V = xint + dy / 2
-    y_j_offset = yint + dy
-    y_j_V = y_j_offset[1:]
+    x_trunc = x[:-1]    # length Nx
+    y_trunc = y[:-1]    # length Ny
+    x_mid = x_trunc + dx / 2
+    y_mid = y_trunc + dy / 2
+    y_offset = y_trunc + dy
+    y_offset_trunc = y_offset[1:]
 
-    UGridX, UGridY = np.meshgrid(xint, y_j_U)
-    VGridX, VGridY = np.meshgrid(x_i_V, y_j_V)
+    UGridX, UGridY = np.meshgrid(x_trunc, y_mid)
+    VGridX, VGridY = np.meshgrid(x_mid, y_offset_trunc)
 
     N_U = Nx * Ny
     Ny_minus = Ny - 1
@@ -117,13 +119,15 @@ for k in size_range:
     f = np.zeros((Ny, Nx))
     g = np.zeros((Ny_minus, Nx))
     h = np.zeros((Ny, Nx))
-    z = np.zeros(Nib)
+    z_x = np.zeros(Nib)
+    z_y = np.zeros(Nib)
 
     # Analytic solutions
     UExact = np.zeros((Ny, Nx))
     VExact = np.zeros((Ny_minus, Nx))
     PExact = np.zeros((Ny, Nx))
-    lam_exact = np.ones(Nib)
+    lam_x_exact = np.ones(Nib)
+    lam_y_exact = np.ones(Nib)
 
     def compute_f(xx, yy):
         return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
@@ -134,17 +138,18 @@ for k in size_range:
 
     for j in range(Ny):
         for i in range(Nx):
-            f[j, i] = compute_f(xint[i], y_j_U[j])
-            UExact[j, i] = compute_U(xint[i], y_j_U[j])
-            PExact[j, i] = compute_P(xint[i], yint[j])
+            f[j, i] = compute_f(x_trunc[i], y_mid[j])
+            UExact[j, i] = compute_U(x_trunc[i], y_mid[j])
+            PExact[j, i] = compute_P(x_mid[i], y_mid[j])
 
     for j in range(Ny_minus):
         for i in range(Nx):
-            g[j, i] = compute_g(x_i_V[i], yint[j] + dy)
-            VExact[j, i] = compute_V(x_i_V[i], yint[j] + dy)
+            g[j, i] = compute_g(x_mid[i], y_offset_trunc[j] + dy)
+            VExact[j, i] = compute_V(x_mid[i], y_offset_trunc[j] + dy)
 
     for j in range(Nib):
-        z[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_r) + interpPhi(VGridX, VGridY, xib, yib, VExact, delta_r)
+        z_x[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_r)
+        z_y[:] = interpPhi(VGridX, VGridY, xib, yib, VExact, delta_r)
 
     # BCs
     V_lower = -3.5
@@ -155,11 +160,11 @@ for k in size_range:
     h_bc_mat = np.zeros((Ny, Nx))
 
     # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
-    f_bc = f.ravel(order='F') + spreadQ(UGridX, UGridY, xib, yib, lam_exact, delta_r) + f_bc_mat.ravel(order='F')
+    f_bc = f.ravel(order='F') + spreadQ(UGridX, UGridY, xib, yib, lam_x_exact, delta_r) + f_bc_mat.ravel(order='F')
 
     g_bc_mat[0, :] = -V_lower / dy**2
     g_bc_mat[-1, :] = -V_upper / dy**2
-    g_bc = g.ravel(order='F') + spreadQ(VGridX, VGridY, xib, yib, lam_exact, delta_r) + g_bc_mat.ravel(order='F')
+    g_bc = g.ravel(order='F') + spreadQ(VGridX, VGridY, xib, yib, lam_y_exact, delta_r) + g_bc_mat.ravel(order='F')
 
     h_bc_mat[0, :] = V_lower / dy
     h_bc_mat[-1, :] = -V_upper / dy
@@ -189,10 +194,10 @@ for k in size_range:
     Lap_V = kron(D2_x, eye(Ny_minus, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_V, format='csr')
 
     # Gradients
-    Dx_f = diags([-np.ones(Nx), np.ones(Nx)], offsets=[0, 1], shape=(Nx, Nx), format='lil')
-    Dx_f[-1, 0] = 1.0
-    D_x_forward = (Dx_f / dx).tocsr()
-    G_x = kron(D_x_forward, eye(Ny, format='csr'), format='csr')
+    Dx_b = diags([np.ones(Nx), -np.ones(Nx)], offsets=[0, -1], shape=(Nx, Nx), format='lil')
+    Dx_b[0, -1] = -1.0  # periodic: U[0] uses P[0] - P[Nx-1]
+    D_x_backward = (Dx_b / dx).tocsr()
+    G_x = kron(D_x_backward, eye(Ny, format='csr'), format='csr')
 
     D_y_small = diags([-np.ones(Ny_minus), np.ones(Ny_minus)], offsets=[0, 1], shape=(Ny_minus, Ny), format='csr') / dy
     G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
@@ -211,6 +216,10 @@ for k in size_range:
     Z_PNib = csr_matrix((N_P, Nib))
     Z_NibP = csr_matrix((Nib, N_P))
     Z_NibNib = csr_matrix((Nib, Nib))
+    Z_UNib = csr_matrix((N_U, Nib))
+    Z_NibU = csr_matrix((Nib, N_U))
+    Z_VNib = csr_matrix((N_V, Nib))
+    Z_NibV = csr_matrix((Nib, N_V))
 
     S_U = np.zeros((N_U,Nib))
     S_V = np.zeros((N_V,Nib))
@@ -237,19 +246,20 @@ for k in size_range:
 
     for j in range(Ny_minus):
         for i in range(Nx):
-            g[j, i] = compute_g(x_i_V[i], yint[j] + dy)
-            VExact[j, i] = compute_V(x_i_V[i], yint[j] + dy)
+            g[j, i] = compute_g(x_mid[i], y_offset_trunc[j])
+            VExact[j, i] = compute_V(x_mid[i], y_offset_trunc[j])
 
     # Saddle point system
     A = bmat([
-        [Lap_U,                  Z_UV,            -G_x,             S_U],
-        [Z_VU,                   Lap_V,           -G_y,             S_V],
-        [D_x,                    D_y,             Z_PU,             Z_PNib],
-        [J_U,                    J_V,             Z_NibP,           Z_NibNib] 
+        [Lap_U,                  Z_UV,            -G_x,             S_U,            Z_UNib],
+        [Z_VU,                   Lap_V,           -G_y,             Z_VNib,         S_V],
+        [D_x,                    D_y,             Z_PU,             Z_PNib,         Z_PNib],
+        [J_U,                    Z_NibV,          Z_NibP,           Z_NibNib,       Z_NibNib], 
+        [Z_NibU,                 J_V,             Z_NibP,           Z_NibNib,       Z_NibNib] 
     ], format='csr')
 
     # RHS vector (Fortran order flattening already done)
-    RHS = np.concatenate([f_bc, g_bc, h_bc, z])
+    RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
 
     # Solve
     sol = spsolve(A, RHS)
@@ -258,7 +268,8 @@ for k in size_range:
     U = sol[:N_U]
     V = sol[N_U:N_U + N_V]
     P = sol[N_U + N_V:N_U + N_V + N_U]
-    lam = sol[N_U + N_V + N_U:]
+    lam_X = sol[N_U + N_V + N_U:N_U + N_V + N_U + Nib]
+    lam_Y = sol[N_U + N_V + N_U + Nib:]
 
     P = P - np.mean(P)
 
@@ -266,7 +277,8 @@ for k in size_range:
     UNumericalList[0:Nx**2, k] = U
     VNumericalList[0:Nx * (Ny - 1), k] = V
     PNumericalList[0:Nx**2, k] = P
-    LamNumericalList[0:Nib, k] = lam
+    Lam_X_NumericalList[0:Nib, k] = lam_X
+    Lam_Y_NumericalList[0:Nib, k] = lam_Y
     UExactList[0:Nx**2, k] = UExact.ravel(order='F')
     VExactList[0:Nx * (Ny - 1), k] = VExact.ravel(order='F')
     PExactList[0:Nx**2, k] = PExact.ravel(order='F')
@@ -291,12 +303,14 @@ for k in size_range:
 err2Norm_U = np.zeros(size)
 err2Norm_V = np.zeros(size)
 err2Norm_P = np.zeros(size)
-err2Norm_Lam = np.zeros(size)
+err2Norm_Lam_X = np.zeros(size)
+err2Norm_Lam_Y = np.zeros(size)
 for i in size_range:
     err2Norm_U[i] = np.linalg.norm(UExactList[0:int(N[i]**2), i] - UNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(UExactList[0:int(N[i]**2),i], ord=2)
     err2Norm_V[i] = np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)), i] - VNumericalList[0:int(N[i]*(N[i]-1)), i], ord=2) / np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)),i], ord=2)
     err2Norm_P[i] = np.linalg.norm(PExactList[0:int(N[i]**2), i] - PNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(PExactList[0:int(N[i]**2),i], ord=2)
-    err2Norm_Lam[i] = np.linalg.norm(LamExactList[0:int(Nib), i] - LamNumericalList[0:int(Nib), i], ord=2) / np.linalg.norm(LamExactList[0:int(Nib), i], ord=2)
+    err2Norm_Lam_X[i] = np.linalg.norm(Lam_X_ExactList[0:int(Nib), i] - Lam_X_NumericalList[0:int(Nib), i], ord=2) / np.linalg.norm(Lam_X_ExactList[0:int(Nib), i], ord=2)
+    err2Norm_Lam_Y[i] = np.linalg.norm(Lam_Y_ExactList[0:int(Nib), i] - Lam_Y_NumericalList[0:int(Nib), i], ord=2) / np.linalg.norm(Lam_Y_ExactList[0:int(Nib), i], ord=2)
 
 h = 1.0 / N
 def rates(err):
@@ -308,13 +322,16 @@ def rates(err):
 print("U rates:", rates(err2Norm_U))
 print("V rates:", rates(err2Norm_V))
 print("P rates:", rates(err2Norm_P))
+print("Lam_X rates:", rates(err2Norm_Lam_X))
+print("Lam_Y rates:", rates(err2Norm_Lam_Y))
 
 plt.figure(figsize=(6,5))
 plt.loglog(N, err2Norm_U, '--o', label=r'$Err_U$')
 plt.loglog(N, err2Norm_V, '--o', label=r'$Err_V$')
 plt.loglog(N, err2Norm_P, '--o', label=r'$Err_P$')
-plt.loglog(N, err2Norm_Lam, '--o', label=r'$Err_\lambda$')
-plt.loglog(N, h**2 * .1, '--', label='2nd order')
+plt.loglog(N, err2Norm_Lam_X, '--o', label=r'$Err_{\lambda_X}$')
+plt.loglog(N, err2Norm_Lam_Y, '--o', label=r'$Err_{\lambda_Y}$')
+plt.loglog(N, h**2, '--', label='2nd order')
 
 plt.xlabel(r'$N$', fontsize=22)
 plt.ylabel(r'$Err$', fontsize=22)
@@ -328,7 +345,6 @@ plt.show()
 xplot = np.linspace(0, L, Nx + 2)
 yplot = np.linspace(0, L, Ny + 2)
 Xplot, Yplot = np.meshgrid(xplot, yplot)
-Xint, Yint = np.meshgrid(xint, yint)
 
 # Plotting (3D surface)
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
