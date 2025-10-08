@@ -3,40 +3,6 @@ import matplotlib.pyplot as plt
 from scipy.sparse import diags, kron, eye, csr_matrix, bmat
 from scipy.sparse.linalg import spsolve
 
-def spreadQ(X, Y, xq, yq, q, delta):
-    """
-    Spread point values q at positions (xq, yq) to the grid (X,Y) using kernel delta.
-    """
-    Sq = np.zeros_like(X)
-    Nq = len(q)
-
-    for k in range(Nq):
-        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
-        Sq += q[k] * delta(Rk)
-
-    # flatten with Fortran ordering (column-major, like MATLAB)
-    return Sq.flatten(order='F')
-
-
-def interpPhi(X, Y, xq, yq, Phi, delta):
-    """
-    Interpolate grid field Phi (given as a flat vector) to point values at (xq, yq).
-    """
-    # reshape Phi into 2D with Fortran ordering
-    nx, ny = X.shape
-    Phi = np.reshape(Phi, (nx, ny), order='F')
-
-    Jphi = np.zeros_like(xq, dtype=float)
-    Nq = len(xq)
-    dx = X[0, 1] - X[0, 0]
-    dy = Y[1, 0] - Y[0, 0]
-
-    for k in range(Nq):
-        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
-        Jphi[k] = dx * dy * np.sum(Phi * delta(Rk))
-
-    return Jphi
-
 size = 10
 size_range = range(size)
 N = np.zeros(size)
@@ -70,10 +36,10 @@ for k in size_range:
     y = x.copy()
     dy = dx
 
-    xint = x[:-1]    # length Nx
-    yint = y[:-1]    # length Ny
-    y_j_U = yint + dx / 2
-    x_i_V = xint + dy / 2
+    x_trunc = x[:-1]    # length Nx
+    y_trunc = y[:-1]    # length Ny
+    x_mid = x_trunc + dx / 2
+    y_mid = y_trunc + dy / 2
 
     N_U = Nx * Ny
     Ny_minus = Ny - 1
@@ -99,14 +65,14 @@ for k in size_range:
 
     for j in range(Ny):
         for i in range(Nx):
-            f[j, i] = compute_f(xint[i], y_j_U[j])
-            UExact[j, i] = compute_U(xint[i], y_j_U[j])
-            PExact[j, i] = compute_P(xint[i], yint[j])
+            f[j, i] = compute_f(x_trunc[i], y_mid[j])
+            UExact[j, i] = compute_U(x_trunc[i], y_mid[j])
+            PExact[j, i] = compute_P(x_mid[i], y_mid[j])
 
     for j in range(Ny_minus):
         for i in range(Nx):
-            g[j, i] = compute_g(x_i_V[i], yint[j] + dy)
-            VExact[j, i] = compute_V(x_i_V[i], yint[j] + dy)
+            g[j, i] = compute_g(x_mid[i], y_trunc[j] + dy)
+            VExact[j, i] = compute_V(x_mid[i], y_trunc[j] + dy)
 
     # BCs
     V_lower = -3.5
@@ -151,10 +117,10 @@ for k in size_range:
     Lap_V = kron(D2_x, eye(Ny_minus, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_V, format='csr')
 
     # Gradients
-    Dx_f = diags([-np.ones(Nx), np.ones(Nx)], offsets=[0, 1], shape=(Nx, Nx), format='lil')
-    Dx_f[-1, 0] = 1.0
-    D_x_forward = (Dx_f / dx).tocsr()
-    G_x = kron(D_x_forward, eye(Ny, format='csr'), format='csr')
+    Dx_b = diags([np.ones(Nx), -np.ones(Nx)], offsets=[0, -1], shape=(Nx, Nx), format='lil')
+    Dx_b[0, -1] = -1.0  # periodic: U[0] uses P[0] - P[Nx-1]
+    D_x_backward = (Dx_b / dx).tocsr()
+    G_x = kron(D_x_backward, eye(Ny, format='csr'), format='csr')
 
     D_y_small = diags([-np.ones(Ny_minus), np.ones(Ny_minus)], offsets=[0, 1], shape=(Ny_minus, Ny), format='csr') / dy
     G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
@@ -170,8 +136,6 @@ for k in size_range:
     Z_VP = csr_matrix((N_V, N_P))
     Z_PU = csr_matrix((N_P, N_U))
     Z_PV = csr_matrix((N_P, N_V))
-
-    xint[i], y_j_U[j]
 
     # Saddle point system
     A = bmat([
@@ -241,6 +205,7 @@ plt.figure(figsize=(6,5))
 plt.loglog(N, err2Norm_U, '--o', label=r'$Err$')
 plt.loglog(N, err2Norm_V, '--o', label=r'$Err$')
 plt.loglog(N, err2Norm_P, '--o', label=r'$Err$')
+plt.loglog(N, h**2, '--', label='2nd order')
 
 plt.xlabel(r'$N$', fontsize=22)
 plt.ylabel(r'$Err$', fontsize=22)
@@ -254,7 +219,6 @@ plt.show()
 xplot = np.linspace(0, L, Nx + 2)
 yplot = np.linspace(0, L, Ny + 2)
 Xplot, Yplot = np.meshgrid(xplot, yplot)
-Xint, Yint = np.meshgrid(xint, yint)
 
 # Plotting (3D surface)
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
