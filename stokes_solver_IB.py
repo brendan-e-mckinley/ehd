@@ -153,11 +153,10 @@ for k in size_range:
     y_trunc = y[:-1]    # length Ny
     x_mid = x_trunc + dx / 2
     y_mid = y_trunc + dy / 2
-    y_offset = y_trunc + dy
-    y_offset_trunc = y_trunc[1:]
+    y_offset = y_trunc[1:]
 
     UGridX, UGridY = np.meshgrid(x_trunc, y_mid)
-    VGridX, VGridY = np.meshgrid(x_mid, y_offset_trunc)
+    VGridX, VGridY = np.meshgrid(x_mid, y_offset)
 
     N_U = Nx * Ny
     Ny_minus = Ny - 1
@@ -194,8 +193,8 @@ for k in size_range:
 
     for j in range(Ny_minus):
         for i in range(Nx):
-            g[j, i] = compute_g(x_mid[i], y_offset_trunc[j])
-            VExact[j, i] = compute_V(x_mid[i], y_offset_trunc[j])
+            g[j, i] = compute_g(x_mid[i], y_offset[j])
+            VExact[j, i] = compute_V(x_mid[i], y_offset[j])
 
     z_x[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_made)
     z_y[:] = interpPhi(VGridX, VGridY, xib, yib, VExact, delta_made)
@@ -260,7 +259,7 @@ for k in size_range:
     # Solve
     shape = N_U + N_V + N_P + 2 * Nib
     AxOp = AxLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_made, cut, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
-    sol, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=exact_sol, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
+    sol, info = gmres(AxOp, RHS, rtol=tol, restart=500, x0=exact_sol, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
     # Split (no change in ordering of partition)
     U = sol[:N_U]
