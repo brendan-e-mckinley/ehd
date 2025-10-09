@@ -2,78 +2,57 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.sparse import diags, kron, eye, csr_matrix, bmat
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
-from sksparse.cholmod import cholesky
 
 # Delta functions
 def delta_a(r, a):
     return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
 
-def delta_r(r, dx):
-    r = abs(r/dx)
-    if r < 1:
-        return (3 - 2*r + np.sqrt(1 + 4*r - 4*r**2)) / 8 / dx
-    elif r < 2:
-        return (5 - 2*r - np.sqrt(-7 + 12*r - 4*r**2)) / 8 / dx
-    else:
-        return 0.0
+def make_delta(dx):
+    """Return a delta(r) function using a = 1.2 * dx."""
+    def delta(r):
+        return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
+    return delta
 
-def spreadQ(X, Y, xq, yq, q, delta, cut):
-    Ny, Nx = X.shape
+def spreadQ(X, Y, xq, yq, q, delta, ds=None):
+    """
+    Spread Lagrangian forces q (force per unit length) to Eulerian grid (X,Y).
+    If ds is None, we estimate it from the Lagrangian coordinates.
+    Returns flattened array in Fortran order.
+    """
+    Sq = np.zeros_like(X)
     dx = X[0, 1] - X[0, 0]
     dy = Y[1, 0] - Y[0, 0]
-    Sq = np.zeros_like(X)
+    Nq = len(q)
 
-    for k in range(len(q)):
-        xk, yk, qk = xq[k], yq[k], q[k]
+    # estimate ds from successive Lagrangian positions (works for closed curves)
+    if ds is None:
+        # circular/closed curve; compute pairwise chord lengths and take mean
+        xp = np.asarray(xq)
+        yp = np.asarray(yq)
+        # append first point so diff wraps
+        dxs = np.sqrt(np.diff(np.concatenate([xp, xp[:1]]))**2 + np.diff(np.concatenate([yp, yp[:1]]))**2)
+        ds = np.mean(dxs)
 
-        # Determine the grid region influenced by this point
-        i_min = max(int((xk - cut - X[0,0]) / dx), 0)
-        i_max = min(int((xk + cut - X[0,0]) / dx) + 1, Nx)
-        j_min = max(int((yk - cut - Y[0,0]) / dy), 0)
-        j_max = min(int((yk + cut - Y[0,0]) / dy) + 1, Ny)
+    for k in range(Nq):
+        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
+        # HERE we include ds to convert force-per-length -> force density
+        Sq += q[k] * delta(Rk) * ds
 
-        # Spread contribution only to local patch
-        for j in range(j_min, j_max):
-            for i in range(i_min, i_max):
-                dxk = X[j, i] - xk
-                dyk = Y[j, i] - yk
-                R = np.sqrt(dxk**2 + dyk**2)
-
-                if R <= cut:
-                    Sq[j, i] += qk * delta(R, dx) * dx * dy
-
-    # Flatten result in Fortran order (column-major)
-    return Sq.flatten(order='F')
+    return Sq.ravel(order='F')
 
 
-def interpPhi(X, Y, xq, yq, Phi, delta, cut):
-    Ny, Nx = X.shape
-    Phi_reshaped = Phi.reshape(Ny, Nx, order='F')
-    Jphi = np.zeros_like(xq)
+def interpPhi(X, Y, xq, yq, Phi, delta):
+    if Phi.ndim == 1:
+        # reshape back to 2D grid assuming column-major (Fortran) order
+        Phi = Phi.reshape(X.shape, order='F')
+
+    Jphi = np.zeros_like(xq, dtype=float)
     dx = X[0, 1] - X[0, 0]
     dy = Y[1, 0] - Y[0, 0]
 
     for k in range(len(xq)):
-        xk, yk = xq[k], yq[k]
-
-        # Determine local grid patch indices within delta support
-        i_min = max(int((xk - cut - X[0,0]) / dx), 0)
-        i_max = min(int((xk + cut - X[0,0]) / dx) + 1, Nx)
-        j_min = max(int((yk - cut - Y[0,0]) / dy), 0)
-        j_max = min(int((yk + cut - Y[0,0]) / dy) + 1, Ny)
-
-        # Accumulate weighted sum over the local region
-        s = 0.0
-        for j in range(j_min, j_max):
-            for i in range(i_min, i_max):
-                dxk = X[j, i] - xk
-                dyk = Y[j, i] - yk
-                R = np.sqrt(dxk**2 + dyk**2)
-
-                if R <= cut:
-                    s += Phi_reshaped[j, i] * delta(R, dx)
-
-        Jphi[k] = dx * dy * s
+        Rk = np.sqrt((X - xq[k])**2 + (Y - yq[k])**2)
+        Jphi[k] = dx * dy * np.sum(Phi * delta(Rk))
 
     return Jphi
 
@@ -95,15 +74,15 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta, cut, N_U, N_V, N
     Lam_Y = x[offset:offset + Nib]
 
     res = np.zeros_like(x)
-    res[0:N_U] = Lap_U @ U - G_x @ P + spreadQ(UGridX, UGridY, xib, yib, Lam_X, delta, cut)
+    res[0:N_U] = Lap_U @ U - G_x @ P + spreadQ(UGridX, UGridY, xib, yib, Lam_X, delta)
     offset = N_U
-    res[offset:offset + N_V] = Lap_V @ V - G_y @ P + spreadQ(VGridX, VGridY, xib, yib, Lam_Y, delta, cut)
+    res[offset:offset + N_V] = Lap_V @ V - G_y @ P + spreadQ(VGridX, VGridY, xib, yib, Lam_Y, delta)
     offset = offset + N_V
     res[offset:offset + N_P] = D_x @ U + D_y @ V
     offset = offset + N_P
-    res[offset:offset + Nib] = interpPhi(UGridX, UGridY, xib, yib, U, delta, cut)
+    res[offset:offset + Nib] = interpPhi(UGridX, UGridY, xib, yib, U, delta)
     offset = offset + Nib
-    res[offset:offset + Nib] = interpPhi(VGridX, VGridY, xib, yib, V, delta, cut)
+    res[offset:offset + Nib] = interpPhi(VGridX, VGridY, xib, yib, V, delta)
     
     return res
 
@@ -168,12 +147,14 @@ for k in size_range:
     n_x = np.cos(theta)
     n_y = np.sin(theta)
 
+    delta_made = make_delta(dx)
+
     x_trunc = x[:-1]    # length Nx
     y_trunc = y[:-1]    # length Ny
     x_mid = x_trunc + dx / 2
     y_mid = y_trunc + dy / 2
     y_offset = y_trunc + dy
-    y_offset_trunc = y_offset[1:]
+    y_offset_trunc = y_trunc[1:]
 
     UGridX, UGridY = np.meshgrid(x_trunc, y_mid)
     VGridX, VGridY = np.meshgrid(x_mid, y_offset_trunc)
@@ -194,8 +175,8 @@ for k in size_range:
     UExact = np.zeros((Ny, Nx))
     VExact = np.zeros((Ny_minus, Nx))
     PExact = np.zeros((Ny, Nx))
-    lam_x_exact = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_r, cut)
-    lam_y_exact = interpPhi(VGridX, VGridY, xib, yib, VExact, delta_r, cut)
+    lam_x_exact = np.zeros(Nib)
+    lam_y_exact = np.zeros(Nib)
 
     exact_sol = np.concatenate([UExact.ravel(order='F'), VExact.ravel(order='F'), PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
 
@@ -216,8 +197,8 @@ for k in size_range:
             g[j, i] = compute_g(x_mid[i], y_offset_trunc[j])
             VExact[j, i] = compute_V(x_mid[i], y_offset_trunc[j])
 
-    z_x[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_r, cut)
-    z_y[:] = interpPhi(VGridX, VGridY, xib, yib, VExact, delta_r, cut)
+    z_x[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_made)
+    z_y[:] = interpPhi(VGridX, VGridY, xib, yib, VExact, delta_made)
 
     # BCs
     V_lower = -3.5
@@ -260,8 +241,6 @@ for k in size_range:
     # Laplacians (Kronecker products)
     Lap_U = kron(D2_x, eye(Ny, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_U, format='csr')
     Lap_V = kron(D2_x, eye(Ny_minus, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_V, format='csr')
-    #dLap_U = cholesky(Lap_U) 
-    #dLap_V = cholesky(Lap_V) 
 
     # Gradients
     Dx_b = diags([np.ones(Nx), -np.ones(Nx)], offsets=[0, -1], shape=(Nx, Nx), format='lil')
@@ -276,63 +255,13 @@ for k in size_range:
     D_x = -G_x.transpose()
     D_y = -G_y.transpose()
 
-    # Zero blocks for bmat (explicit shapes)
-    # Z_UV = csr_matrix((N_U, N_V))
-    # Z_UP = csr_matrix((N_U, N_P))
-    # Z_VU = csr_matrix((N_V, N_U))
-    # Z_VP = csr_matrix((N_V, N_P))
-    # Z_PU = csr_matrix((N_P, N_U))
-    # Z_PV = csr_matrix((N_P, N_V))
-    # Z_PNib = csr_matrix((N_P, Nib))
-    # Z_NibP = csr_matrix((Nib, N_P))
-    # Z_NibNib = csr_matrix((Nib, Nib))
-    # Z_UNib = csr_matrix((N_U, Nib))
-    # Z_NibU = csr_matrix((Nib, N_U))
-    # Z_VNib = csr_matrix((N_V, Nib))
-    # Z_NibV = csr_matrix((Nib, N_V))
-
-    # S_U = np.zeros((N_U,Nib))
-    # S_V = np.zeros((N_V,Nib))
-    # J_U = np.zeros((Nib,N_U))
-    # J_V = np.zeros((Nib,N_V))
-
-    # # build dense S matrices
-    # for ib in range(Nib):
-    #     one_hot = np.zeros(Nib)
-    #     one_hot[ib] = 1
-    #     S_U[:,ib] = spreadQ(UGridX, UGridY, xib, yib, one_hot, delta_r, cut)
-    #     S_V[:,ib] = spreadQ(VGridX, VGridY, xib, yib, one_hot, delta_r, cut)
-
-    # # build dense J matrices
-    # for it in range(N_U):
-    #     one_hot = np.zeros(N_U)
-    #     one_hot[it] = 1
-    #     J_U[:,it] = interpPhi(UGridX, UGridY, xib, yib, one_hot, delta_r, cut)
-
-    # for it in range(N_V):
-    #     one_hot = np.zeros(N_V)
-    #     one_hot[it] = 1
-    #     J_V[:,it] = interpPhi(VGridX, VGridY, xib, yib, one_hot, delta_r, cut)
-
-    # Saddle point system
-    # A = bmat([
-    #     [Lap_U,                  Z_UV,            -G_x,             S_U,            Z_UNib],
-    #     [Z_VU,                   Lap_V,           -G_y,             Z_VNib,         S_V],
-    #     [D_x,                    D_y,             Z_PU,             Z_PNib,         Z_PNib],
-    #     [J_U,                    Z_NibV,          Z_NibP,           Z_NibNib,       Z_NibNib], 
-    #     [Z_NibU,                 J_V,             Z_NibP,           Z_NibNib,       Z_NibNib] 
-    # ], format='csr')
-
-    # RHS vector (Fortran order flattening already done)
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    #RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
 
     # Solve
     shape = N_U + N_V + N_P + 2 * Nib
-    AxOp = AxLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_r, cut, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
+    AxOp = AxLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_made, cut, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
     sol, info = gmres(AxOp, RHS, rtol=tol, maxiter=1000, restart=500, x0=exact_sol, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
-    #sol = spsolve(A, RHS)
     # Split (no change in ordering of partition)
     U = sol[:N_U]
     V = sol[N_U:N_U + N_V]
@@ -378,8 +307,8 @@ for i in size_range:
     err2Norm_U[i] = np.linalg.norm(UExactList[0:int(N[i]**2), i] - UNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(UExactList[0:int(N[i]**2),i], ord=2)
     err2Norm_V[i] = np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)), i] - VNumericalList[0:int(N[i]*(N[i]-1)), i], ord=2) / np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)),i], ord=2)
     err2Norm_P[i] = np.linalg.norm(PExactList[0:int(N[i]**2), i] - PNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(PExactList[0:int(N[i]**2),i], ord=2)
-    err2Norm_Lam_X[i] = np.linalg.norm(Lam_X_ExactList[0:int(Nib_array[i]), i] - Lam_X_NumericalList[0:int(Nib_array[i]), i], ord=2) / np.linalg.norm(Lam_X_ExactList[0:int(Nib_array[i]), i], ord=2)
-    err2Norm_Lam_Y[i] = np.linalg.norm(Lam_Y_ExactList[0:int(Nib_array[i]), i] - Lam_Y_NumericalList[0:int(Nib_array[i]), i], ord=2) / np.linalg.norm(Lam_Y_ExactList[0:int(Nib_array[i]), i], ord=2)
+    err2Norm_Lam_X[i] = np.linalg.norm(Lam_X_NumericalList[0:int(Nib_array[i]), i], ord=2)
+    err2Norm_Lam_Y[i] = np.linalg.norm(Lam_Y_NumericalList[0:int(Nib_array[i]), i], ord=2)
 
 h = 1.0 / N
 def rates(err):
