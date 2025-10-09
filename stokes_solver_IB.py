@@ -142,9 +142,9 @@ PExactList = np.zeros((int(N[-1] * N[-1]), size))
 VNumericalList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
 VExactList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
 Lam_X_NumericalList = np.zeros((int(Nib_max), size))
-Lam_X_ExactList = np.ones((int(Nib_max), size))
+Lam_X_ExactList = np.zeros((int(Nib_max), size))
 Lam_Y_NumericalList = np.zeros((int(Nib_max), size))
-Lam_Y_ExactList = np.ones((int(Nib_max), size))
+Lam_Y_ExactList = np.zeros((int(Nib_max), size))
 
 for k in size_range:
     # Parameters
@@ -203,7 +203,6 @@ for k in size_range:
         return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
 
     def compute_g(xx, yy):
-        #return -4 * np.pi**2 * np.cos(2*np.pi*xx) * (2*np.cos(2*np.pi*yy) - 1) - 2 * np.pi * np.cos(2*np.pi*yy) * np.cos(2*np.pi*xx)
         return -4 * np.pi**2 * np.cos(2*np.pi*xx) * (2 * np.cos(2*np.pi*yy) - 1) - 2 * np.pi * np.cos(2*np.pi*yy) * np.cos(2*np.pi*xx)
 
     for j in range(Ny):
