@@ -88,8 +88,7 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta, cut, N_U, N_V, N
 
 L = 1.0
 rad = 0.25
-size = 4
-tol = 1e-4
+size = 7
 
 size_range = range(size)
 N = np.zeros(size)
@@ -135,6 +134,8 @@ for k in size_range:
     y = x.copy()
     dy = dx
 
+    tol = 0.01 * dx**2
+
     cut = 6 * 1.2 * dx # cutoff value
 
     # IB
@@ -174,10 +175,8 @@ for k in size_range:
     UExact = np.zeros((Ny, Nx))
     VExact = np.zeros((Ny_minus, Nx))
     PExact = np.zeros((Ny, Nx))
-    lam_x_exact = np.zeros(Nib)
-    lam_y_exact = np.zeros(Nib)
-
-    exact_sol = np.concatenate([UExact.ravel(order='F'), VExact.ravel(order='F'), PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
+    lam_x_exact = np.ones(Nib)
+    lam_y_exact = np.ones(Nib)
 
     def compute_f(xx, yy):
         return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
@@ -196,6 +195,8 @@ for k in size_range:
             g[j, i] = compute_g(x_mid[i], y_offset[j])
             VExact[j, i] = compute_V(x_mid[i], y_offset[j])
 
+    exact_sol = np.concatenate([UExact.ravel(order='F'), VExact.ravel(order='F'), PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
+
     z_x[:] = interpPhi(UGridX, UGridY, xib, yib, UExact, delta_made)
     z_y[:] = interpPhi(VGridX, VGridY, xib, yib, VExact, delta_made)
 
@@ -208,11 +209,11 @@ for k in size_range:
     h_bc_mat = np.zeros((Ny, Nx))
 
     # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
-    f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
+    f_bc = f.ravel(order='F') + spreadQ(UGridX, UGridY, xib, yib, lam_x_exact, delta_made) + f_bc_mat.ravel(order='F')
 
     g_bc_mat[0, :] = -V_lower / dy**2
     g_bc_mat[-1, :] = -V_upper / dy**2
-    g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
+    g_bc = g.ravel(order='F') + spreadQ(VGridX, VGridY, xib, yib, lam_y_exact, delta_made) + g_bc_mat.ravel(order='F')
 
     h_bc_mat[0, :] = V_lower / dy
     h_bc_mat[-1, :] = -V_upper / dy
@@ -279,6 +280,8 @@ for k in size_range:
     UExactList[0:Nx**2, k] = UExact.ravel(order='F')
     VExactList[0:Nx * (Ny - 1), k] = VExact.ravel(order='F')
     PExactList[0:Nx**2, k] = PExact.ravel(order='F')
+    Lam_X_ExactList[0:Nib, k] = lam_x_exact
+    Lam_Y_ExactList[0:Nib, k] = lam_y_exact
 
     # Reshape back using Fortran order to match MATLAB layout
     Uplot = U.reshape((Ny, Nx), order='F')
@@ -306,8 +309,8 @@ for i in size_range:
     err2Norm_U[i] = np.linalg.norm(UExactList[0:int(N[i]**2), i] - UNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(UExactList[0:int(N[i]**2),i], ord=2)
     err2Norm_V[i] = np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)), i] - VNumericalList[0:int(N[i]*(N[i]-1)), i], ord=2) / np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)),i], ord=2)
     err2Norm_P[i] = np.linalg.norm(PExactList[0:int(N[i]**2), i] - PNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(PExactList[0:int(N[i]**2),i], ord=2)
-    err2Norm_Lam_X[i] = np.linalg.norm(Lam_X_NumericalList[0:int(Nib_array[i]), i], ord=2)
-    err2Norm_Lam_Y[i] = np.linalg.norm(Lam_Y_NumericalList[0:int(Nib_array[i]), i], ord=2)
+    err2Norm_Lam_X[i] = np.linalg.norm(Lam_X_ExactList[0:int(Nib_array[i]), i] - Lam_X_NumericalList[0:int(Nib_array[i]), i], ord=2) / np.linalg.norm(Lam_X_ExactList[0:int(Nib_array[i]), i], ord=2)
+    err2Norm_Lam_Y[i] = np.linalg.norm(Lam_Y_ExactList[0:int(Nib_array[i]), i] - Lam_Y_NumericalList[0:int(Nib_array[i]), i], ord=2) / np.linalg.norm(Lam_Y_ExactList[0:int(Nib_array[i]), i], ord=2) 
 
 h = 1.0 / N
 def rates(err):
