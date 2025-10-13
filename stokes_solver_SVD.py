@@ -209,12 +209,12 @@ def apply_Schur(unknown_blocks, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_
     return np.concatenate([res_1, res_2, res_3])
 
 def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC):
-    RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x) - G_x @ Pi
+    RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x)
     U = spsolve(Lap_U, RHS)
     return U
     
 def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_BC):
-    RHS = g_BC + G_y @ Pi - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y) - G_y @ Pi
+    RHS = g_BC + G_y @ Pi - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y)
     V = spsolve(Lap_V, RHS)
     return V
 
@@ -232,7 +232,7 @@ def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGr
     Ainv_U, Ainv_V = apply_Ainv(Lap_U, Lap_V, [rhs_1, rhs_2])
     CAinv_1 = D_x @ Ainv_U + D_y @ Ainv_V
     CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x)
-    CAinv_3 = interpPhi_x(VGridX, VGridY, xib, yib, Ainv_V, delta_y)
+    CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y)
 
     schur_rhs_1 = CAinv_1 - rhs_3
     schur_rhs_2 = CAinv_2 - rhs_4
@@ -332,6 +332,8 @@ for k in size_range:
     lam_x_exact = np.ones(Nib)
     lam_y_exact = np.ones(Nib)
 
+    exact_sol = np.concatenate([PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
+
     def compute_f(xx, yy):
         return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
 
@@ -348,8 +350,6 @@ for k in size_range:
         for i in range(Nx):
             g[j, i] = compute_g(x_mid[i], y_offset[j])
             VExact[j, i] = compute_V(x_mid[i], y_offset[j])
-
-    exact_sol = np.concatenate([PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
 
     z_x[:] = interpPhi_x(UGridX, UGridY, xib, yib, UExact, delta_x)
     z_y[:] = interpPhi_y(VGridX, VGridY, xib, yib, VExact, delta_y)
