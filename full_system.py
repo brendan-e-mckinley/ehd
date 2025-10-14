@@ -277,14 +277,14 @@ ctxt_R = u_next.copy()
 
 # compute Lambda^E
 
-LambdaE = cpeo.compute_surface_maxwell_stress(Phi.ravel(order='F'), G_x, G_y, Nx, Ny, xib, yib, 0, 0)
+LambdaE = cpeo.compute_surface_maxwell_stress(Phi.ravel(order='F'), G_x, G_y, Nx, Ny, Nib, xib, yib, 0, 0, Jop)
+LambdaE_x = LambdaE[0,:]
+LambdaE_y = LambdaE[1,:]
 
 ################################
 #####  solve N*u = F(phi)  #####
 ################################
 
-L = 1.0
-rad = 0.25
 size = 7
 size_range = range(size)
 N = np.zeros(size)
@@ -294,20 +294,20 @@ for s in size_range:
 
 # compute Nib_max
 Nx_max = int(N[-1])
-x_max = np.linspace(0, L, Nx_max + 1)
+x_max = np.linspace(-L/2, L/2, Nx_max + 1)
 dx_max = x_max[1] - x_max[0]
 dth_max = dx_max / rad
 theta_max = np.arange(0, 2*np.pi - dth_max, dth_max)
 Nib_max = len(theta_max)
 
 def compute_U(xx, yy):
-    return np.sin(2*np.pi*yy) * np.sin(2*np.pi*xx)
+    return np.sin(xx) * np.sin(2 * yy)
 
 def compute_V(xx, yy):
-    return -3.5 + np.cos(2*np.pi*xx) * (np.cos(2*np.pi*yy) - 1)
+    return -np.cos(xx) * (np.sin(yy)**2)
 
 def compute_P(xx, yy):
-    return np.sin(2*np.pi*yy) * np.cos(2*np.pi*xx)
+    return np.zeros_like(xx)
 
 UNumericalList = np.zeros((int(N[-1] * N[-1]), size))
 UExactList = np.zeros((int(N[-1] * N[-1]), size))
@@ -324,7 +324,7 @@ for k in size_range:
     # Parameters
     Nx = int(N[k])
     Ny = Nx
-    x = np.linspace(0, L, Nx + 1)
+    x = np.linspace(-L/2, L/2, Nx + 1)
     dx = x[1] - x[0]
     dx2 = dx**2
     y = x.copy()
@@ -377,10 +377,10 @@ for k in size_range:
     exact_sol = np.concatenate([PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
 
     def compute_f(xx, yy):
-        return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
+        return -5.0 * np.sin(xx) * np.sin(2 * yy)
 
     def compute_g(xx, yy):
-        return -4 * np.pi**2 * np.cos(2*np.pi*xx) * (2 * np.cos(2*np.pi*yy) - 1) - 2 * np.pi * np.cos(2*np.pi*yy) * np.cos(2*np.pi*xx)
+        return -np.cos(xx) * (2.0 - 5.0 * (np.sin(yy)**2))
 
     for j in range(Ny):
         for i in range(Nx):
@@ -396,23 +396,13 @@ for k in size_range:
     z_x[:] = cpeo.interpPhi_x(UGridX, UGridY, xib, yib, UExact, delta_x)
     z_y[:] = cpeo.interpPhi_y(VGridX, VGridY, xib, yib, VExact, delta_y)
 
-    # BCs
-    V_lower = -3.5
-    V_upper = -3.5
-
     f_bc_mat = np.zeros((Ny, Nx))
     g_bc_mat = np.zeros((Ny_minus, Nx))
     h_bc_mat = np.zeros((Ny, Nx))
 
     # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
     f_bc = f.ravel(order='F') + cpeo.spreadQ_x(UGridX, UGridY, xib, yib, lam_x_exact, delta_x) + f_bc_mat.ravel(order='F')
-
-    g_bc_mat[0, :] = -V_lower / dy**2
-    g_bc_mat[-1, :] = -V_upper / dy**2
     g_bc = g.ravel(order='F') + cpeo.spreadQ_y(VGridX, VGridY, xib, yib, lam_y_exact, delta_y) + g_bc_mat.ravel(order='F')
-
-    h_bc_mat[0, :] = V_lower / dy
-    h_bc_mat[-1, :] = -V_upper / dy
     h_bc = h_bc_mat.ravel(order='F')
 
     # 1-D operators
@@ -493,7 +483,7 @@ for k in size_range:
     UFull[0, :] = UFull[1, :]
     UFull[-1, :] = UFull[-2, :]
 
-    VFull = V_lower * np.ones((Ny + 2, Nx + 2))
+    VFull = np.zeros((Ny + 2, Nx + 2))
     VFull[1:Ny, 1:Nx + 1] = Vplot
     VFull[:,0] = VFull[:,1]
     VFull[:,-1] = VFull[:,-2]
@@ -541,8 +531,8 @@ plt.grid(True, which="both", ls="--", lw=0.5)
 plt.tight_layout()
 plt.show()
 
-xplot = np.linspace(0, L, Nx + 2)
-yplot = np.linspace(0, L, Ny + 2)
+xplot = np.linspace(-L/2, L/2, Nx + 2)
+yplot = np.linspace(-L/2, L/2, Ny + 2)
 Xplot, Yplot = np.meshgrid(xplot, yplot)
 
 # Plotting (3D surface)
