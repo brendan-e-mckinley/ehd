@@ -1,243 +1,291 @@
+
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.sparse import diags, kron, eye, csr_matrix, bmat
+import time
+from numba import jit
+from sksparse.cholmod import cholesky
+from scipy.sparse import spdiags, eye, kron, diags
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
-from scipy.interpolate import BSpline
+from scipy.linalg import qr, lstsq
+from scipy.io import loadmat, savemat
+from scipy.interpolate import Akima1DInterpolator, interpn
+import CPEO_utils as cpeo
 
-import numpy as np
-from scipy.interpolate import BSpline
+#######################################
+#####  solve R*phi = rho(u, phi)  #####
+#######################################
 
-def bspline_kernel(n, dx, normalize=True):
-    """
-    Return a centered, compactly supported B-spline kernel φ_h^n(r)
-    such that ∫ φ_h^n(r) dr ≈ 1 (if normalize=True).
+# Grid setup
+Nx = 450  # 256; % number of grid points along one direction
+L = 2.0 * np.pi 
+x = np.linspace(-L/2, L/2, Nx+2) 
+dx = x[1] - x[0]
+y = x.copy()
+dy = y[1] - y[0]
 
-    This version treats values outside the knot range as zero (replacing NaNs)
-    and optionally enforces numerical normalization.
-    """
-    k = n
+xint = x[1:-1]
+yint = y[1:-1]
+Ny = len(yint)
 
-    # Create a centered open-uniform knot vector long enough for degree k.
-    # We pick knots spanning [-k-1, k+1] (integer spacing) which gives
-    # sufficient support for a centered basis.
-    t = np.arange(-(k + 1), (k + 2), 1.0)   # length = 2k + 3 (safe)
-    c = np.zeros(len(t) - k - 1)
-    c[len(c) // 2] = 1.0
+X, Y = np.meshgrid(x, y)  # make 2D grid
+Xint, Yint = np.meshgrid(xint, yint)  # make 2D grid of interior points
 
-    base = BSpline(t, c, k, extrapolate=False)
+# Make immersed boundary mats
+rad = 0.25
+dth = dx / rad
+theta = np.arange(0, 2*np.pi - dth, dth)
+Nib = len(theta)
+xib = rad * np.cos(theta) 
+yib = rad * np.sin(theta)
+n_x = np.cos(theta)
+n_y = np.sin(theta)
 
-    # Precompute a normalization constant (numerical) if requested.
-    norm = 1.0
-    if normalize:
-        # integrate on a range large enough to capture full support:
-        R = (k + 1) * dx  # support roughly within +- (k+1)*dx
-        rgrid = np.linspace(-R, R, max(401, int(8*(k+1))))
-        vals = base(rgrid / dx)
-        vals = np.nan_to_num(vals, nan=0.0)   # outside support -> 0
-        integral = np.trapz(vals, rgrid)      # integral of φ^n (unscaled)
-        # φ_h(r) = (1/dx) * φ^n(r/dx) so integral over r should be integral/dx
-        # we want integral/dx == 1 -> normalization factor = 1 / (integral/dx) = dx / integral
-        if integral == 0.0:
-            raise RuntimeError("B-spline base integral is zero (unexpected).")
-        norm = dx / integral
+# Make finite difference laplacian
+# Dirichlet boundary conditions
+e = (1/dy**2) * np.ones(Ny)
+D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
+I_nx = eye(Nx)
+I_ny = eye(Ny)
+Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
+dLap = cholesky(Lap) # Cholesky decomposition
 
-    def phi_h(r):
-        # Evaluate base at r/dx, replace NaNs with 0 (outside support)
-        vals = base(r / dx)
-        vals = np.nan_to_num(vals, nan=0.0)
-        return (1.0 / dx) * norm * vals
+# Gradients
+Dx_b = diags([np.ones(Nx), -np.ones(Nx)], offsets=[0, -1], shape=(Nx, Nx), format='lil')
+Dx_b[0, -1] = -1.0  # periodic: U[0] uses P[0] - P[Nx-1]
+D_x_backward = (Dx_b / dx).tocsr()
+G_x = kron(D_x_backward, eye(Ny, format='csr'), format='csr')
 
-    return phi_h
+D_y_small = diags([-np.ones(Ny), np.ones(Ny)], offsets=[0, 1], shape=(Ny, Ny), format='csr') / dy
+G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
 
+# Parameters
+beta_BC = 7.94
+sigma_bc = 0.78  # 0.68
+delta_layer = 0.1  # 5*dx; %6*dx;
+cut = 6 * 1.2 * dx # cutoff value
 
-def make_composite_deltas(dx, n=3):
-    """Return delta_x, delta_y composite kernels for staggered grids."""
-    phi_n = bspline_kernel(n, dx, normalize=True)
-    phi_np1 = bspline_kernel(n + 1, dx, normalize=True)
+# Exact solution
+def Phi_exact(x, y):
+    return beta_BC * y + 0 * x
 
-    def delta_x(X, Y, x_l, y_l):
-        return phi_np1(X - x_l) * phi_n(Y - y_l)
+def Npm_exact(x, y):
+    return 0 * x + 1.0
 
-    def delta_y(X, Y, x_l, y_l):
-        return phi_n(X - x_l) * phi_np1(Y - y_l)
+# Boundary conditions
+Phi_BCs = np.zeros_like(Xint)
+Npm_BCs = np.zeros_like(Xint)
 
-    return delta_x, delta_y
+Phi_BCs[0, :] = (1/dy/dy) * Phi_exact(xint, Y[0, 0])
+Phi_BCs[-1, :] += (1/dy/dy) * Phi_exact(xint, Y[-1, -1])
+Phi_BCs[:, 0] += (1/dx/dx) * Phi_exact(X[0, 0], yint)
+Phi_BCs[:, -1] += (1/dx/dx) * Phi_exact(X[-1, -1], yint)
 
-def interpPhi_x(Xu, Yu, xq, yq, U, delta_x):
-    """
-    Interpolate u(x,y) from staggered x-face grid (Xu, Yu)
-    to Lagrangian points (xq, yq) using composite δ_x.
-    """
-    if U.ndim == 1:
-        U = U.reshape(Xu.shape, order='F')
+Npm_BCs[0, :] = (1/dy/dy) * Npm_exact(xint, Y[0, 0])
+Npm_BCs[-1, :] += (1/dy/dy) * Npm_exact(xint, Y[-1, -1])
+Npm_BCs[:, 0] += (1/dx/dx) * Npm_exact(X[0, 0], yint)
+Npm_BCs[:, -1] += (1/dx/dx) * Npm_exact(X[-1, -1], yint)
 
-    Jphi = np.zeros_like(xq)
-    dx = Xu[0, 1] - Xu[0, 0]
-    dy = Yu[1, 0] - Yu[0, 0]
+# Compute exact solutions
+Phi_BC = Phi_exact(X, Y)
+N_pm_BC = Npm_exact(X, Y)
 
-    for k in range(len(xq)):
-        phi = delta_x(Xu, Yu, xq[k], yq[k])
-        Jphi[k] = dx * dy * np.sum(U * phi)
+# Boundary conditions context for Schur system
+ctxt_BCs_Schur = np.concatenate([
+    Phi_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    Npm_BCs.ravel(order='F'),
+    np.zeros(len(xib)) - (sigma_bc),
+    np.zeros(len(xib)),
+    np.zeros(len(xib))
+])
 
-    return Jphi
+# Delta functions (R operator)
+@jit(nopython=True)
+def delta_a(r, a):
+    return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
 
-def interpPhi_y(Xv, Yv, xq, yq, V, delta_y):
-    """
-    Interpolate v(x,y) from staggered y-face grid (Xv, Yv)
-    to Lagrangian points (xq, yq) using composite δ_y.
-    """
-    if V.ndim == 1:
-        V = V.reshape(Xv.shape, order='F')
+@jit(nopython=True)
+def delta(r):
+    return delta_a(r, 1.2*dx)
 
-    Jphi = np.zeros_like(xq)
-    dx = Xv[0, 1] - Xv[0, 0]
-    dy = Yv[1, 0] - Yv[0, 0]
+@jit(nopython=True)
+def delta_r(r):
+    return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
 
-    for k in range(len(xq)):
-        phi = delta_y(Xv, Yv, xq[k], yq[k])
-        Jphi[k] = dx * dy * np.sum(V * phi)
+def Sop_prime(q):
+    return cpeo.spreadQ_prime(Xint, Yint, xib, yib, n_x, n_y, q, delta_r, cut)
 
-    return Jphi
+def Jop(P):
+    return cpeo.interpPhi(Xint, Yint, xib, yib, P, delta, cut)
 
-def spreadQ_x(Xu, Yu, xq, yq, qx, delta_x):
-    """
-    Spread Lagrangian x-forces qx (force per unit length)
-    to Eulerian x-face grid (Xu, Yu) using composite δ_x.
-    """
-    Fx = np.zeros_like(Xu)
+def Jop_prime(P):
+    return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
 
-    xp = np.asarray(xq)
-    yp = np.asarray(yq)
-    dxs = np.sqrt(np.diff(np.concatenate([xp, xp[:1]]))**2 +
-                np.diff(np.concatenate([yp, yp[:1]]))**2)
-    ds = np.mean(dxs)
+def G_d_G(Phi, N_pm):
+    return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
-    for k in range(len(qx)):
-        Fx += qx[k] * delta_x(Xu, Yu, xq[k], yq[k]) * ds
+def b_Op_Schur(ctxt):
+    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
 
-    return Fx.ravel(order='F')
+# Load initial conditions from .mat file
+ld = loadmat('BC_run_N_300_r0p25.mat')
+METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
+Ny_ld = int(ld['Ny'][0, 0])
+Nx_ld = int(ld['Nx'][0, 0])
+Nib_ld = int(ld['Nib'][0, 0])
+sz = Ny_ld * Nx_ld
 
-def spreadQ_y(Xv, Yv, xq, yq, qy, delta_y):
-    """
-    Spread Lagrangian y-forces qy (force per unit length)
-    to Eulerian y-face grid (Xv, Yv) using composite δ_y.
-    """
-    Fy = np.zeros_like(Xv)
+ctxt_ld = ld['ctxt'].ravel(order='F')
+Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')
+N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
+N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
+Q_ld = ctxt_ld[3*sz:3*sz+Nib_ld]
+Q_p_ld = ctxt_ld[3*sz+Nib_ld:3*sz+2*Nib_ld]
+Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
-    xp = np.asarray(xq)
-    yp = np.asarray(yq)
-    dxs = np.sqrt(np.diff(np.concatenate([xp, xp[:1]]))**2 +
-                np.diff(np.concatenate([yp, yp[:1]]))**2)
-    ds = np.mean(dxs)
+Xint_ld = ld['Xint']
+Yint_ld = ld['Yint']
+theta_ld = ld['theta'].ravel()
 
-    for k in range(len(qy)):
-        Fy += qy[k] * delta_y(Xv, Yv, xq[k], yq[k]) * ds
+# Extract the coordinate vectors from the loaded grid
+x_ld = Xint_ld[0, :]  # First row gives x-coordinates
+y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-    return Fy.ravel(order='F')
+# Interpolate initial guesses
+Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
+Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
+Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
+ctxt = np.concatenate([
+    Phi_init.ravel(order='F'),
+    N_p_init.ravel(order='F'),
+    N_m_init.ravel(order='F'),
+    Q_init,
+    Q_p_init,
+    Q_m_init
+])
 
-def AxLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y):
-    n = shape
-    def mv(unknowns):
-        return apply_A(unknowns, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
-    return LinearOperator((n, n), matvec=mv)
+schurRHS = b_Op_Schur(ctxt)
 
-def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y):
-    U = x[0:N_U]
-    offset = N_U
-    V = x[offset:offset + N_V]
-    offset = offset + N_V
-    P = x[offset:offset + N_P]
-    offset = offset + N_P
-    Lam_X = x[offset:offset + Nib]
-    offset = offset + Nib
-    Lam_Y = x[offset:offset + Nib]
+# Anderson acceleration parameters
+beta = 0.2
+m = 50
+DU = np.full((len(schurRHS), m), np.nan)
+DG = np.full((len(schurRHS), m), np.nan)
 
-    res = np.zeros_like(x)
-    res[0:N_U] = Lap_U @ U - G_x @ P + spreadQ_x(UGridX, UGridY, xib, yib, Lam_X, delta_x)
-    offset = N_U
-    res[offset:offset + N_V] = Lap_V @ V - G_y @ P + spreadQ_y(VGridX, VGridY, xib, yib, Lam_Y, delta_y)
-    offset = offset + N_V
-    res[offset:offset + N_P] = D_x @ U + D_y @ V
-    offset = offset + N_P
-    res[offset:offset + Nib] = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x)
-    offset = offset + Nib
-    res[offset:offset + Nib] = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y)
+tol = 1e-4
+u_n = ctxt.copy()
+p_guess = u_n[3*Nx*Ny:]
+
+class GMRES_Counter:
+    def __init__(self):
+        self.niter = 0
+
+    def __call__(self, xk):
+        self.niter += 1
+
+# Build dense Schur matrix
+schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
+schurRHS = b_Op_Schur(ctxt)
+computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
+schurDense = np.zeros((Nib * 3, Nib * 3))
+for col in range(Nib * 3): 
+    eye_mat = np.zeros(Nib * 3)
+    eye_mat[col] = 1
+    p = eye_mat[0:Nib]
+    p_p = eye_mat[Nib:2*Nib]
+    p_m = eye_mat[2*Nib:3*Nib]
+    res_1, res_2, res_3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
+    schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
+
+# Compute SVD once
+U, Sigma, Vh = np.linalg.svd(schurDense)
+
+plot_singular = Sigma / np.max(Sigma)
+indices = np.arange(len(plot_singular))
+
+# Use SVD to solve
+p_next = cpeo.solve_from_svd(U, Sigma, Vh, computedRHS)
+G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
+
+u_next = G_u_n.copy()
+G_u_next = G_u_n.copy()
+err = []
+
+# Anderson acceleration loop
+for its in range(100000):
+    schurRHS = b_Op_Schur(u_next)
+    computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
     
-    return res
+    # Use SVD to solve
+    p_n = cpeo.solve_from_svd(U, Sigma, Vh, computedRHS)
+    G_u_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
-def SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib):
-    n = shape
-    def mv(unknowns):
-        unknown_P = unknowns[:N_P]
-        unknown_Lam_x = unknowns[N_P:N_P + Nib]
-        unknown_Lam_y = unknowns[N_P + Nib:N_P + 2*Nib]
-        return apply_Schur([unknown_P, unknown_Lam_x, unknown_Lam_y], UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
-    return LinearOperator((n, n), matvec=mv)
-
-def apply_Ainv(Lap_U, Lap_V, target_vec):
-    target_vec_1, target_vec_2 = target_vec
-
-    # second and third blocks are straightforward
-    result_vec_1 = spsolve(Lap_U, target_vec_1)
-    result_vec_2 = spsolve(Lap_V, target_vec_2)
-
-    return [result_vec_1, result_vec_2]
-
-def apply_Schur(unknown_blocks, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y):
-    Pi, Lam_x, Lam_y = unknown_blocks
-
-    # apply B 
-    B_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x) - G_x @ Pi
-    B_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y) - G_y @ Pi
-
-    # apply A inverse 
-    Ainv_B_U, Ainv_B_V = apply_Ainv(Lap_U, Lap_V, [B_U, B_V])
-
-    # apply C 
-    res_1 = D_x @ Ainv_B_U + D_y @ Ainv_B_V
-    res_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_B_U, delta_x)
-    res_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_B_V, delta_y)
-
-    return np.concatenate([res_1, res_2, res_3])
-
-def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC):
-    RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x)
-    U = spsolve(Lap_U, RHS)
-    return U
+    m_n = min(m, its + 1)
     
-def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_BC):
-    RHS = g_BC + G_y @ Pi - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y)
-    V = spsolve(Lap_V, RHS)
-    return V
+    # Store differences
+    if its < m:
+        DU[:, its] = u_next - u_n
+        DG[:, its] = G_u_next - G_u_n
+    else:
+        DU = np.roll(DU, -1, axis=1)
+        DG = np.roll(DG, -1, axis=1)
+        DU[:, -1] = u_next - u_n
+        DG[:, -1] = G_u_next - G_u_n
+    
+    f_n = G_u_next - u_next
+    DF = DG[:, :m_n] - DU[:, :m_n]
+    
+    # QR decomposition
+    #Q_qr, R_qr = qr(DF, mode='economic')
+    #gamma = np.linalg.solve(R_qr, Q_qr.T @ f_n)
+    gamma, residuals, rank, s = lstsq(DF, f_n)
+    
+    u_n = u_next.copy()
+    G_u_n = G_u_next.copy()
+    
+    u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
+    
+    # Extract solution components
+    Phi = u_next[:Ny*Nx].reshape(Ny, Nx)
+    Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx)
+    Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx)
+    p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
+    p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+    p_m = u_next[3*Nx*Ny+2*Nib:]
 
-def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib):
-    rhs_1 = rhs[0:N_U]
-    offset = N_U
-    rhs_2 = rhs[offset:offset + N_V]
-    offset = offset + N_V
-    rhs_3 = rhs[offset:offset + N_P]
-    offset = offset + N_P
-    rhs_4 = rhs[offset:offset + Nib]
-    offset = offset + Nib
-    rhs_5 = rhs[offset:offset + Nib]
+    p_next = u_next[3*Nx*Ny:]
+    
+    # Check convergence
+    res1, res2, res3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
+    schur_next = np.concatenate([res1, res2, res3])
+    err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
+    
+    err.append(err_curr)
+    
+    print(f'Iteration {its}: residual = {err_curr}')
+    
+    if err_curr < 1e-4:
+        print('Converged!')
+        break
 
-    Ainv_U, Ainv_V = apply_Ainv(Lap_U, Lap_V, [rhs_1, rhs_2])
-    CAinv_1 = D_x @ Ainv_U + D_y @ Ainv_V
-    CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x)
-    CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y)
+ctxt_R = u_next.copy()
 
-    schur_rhs_1 = CAinv_1 - rhs_3
-    schur_rhs_2 = CAinv_2 - rhs_4
-    schur_rhs_3 = CAinv_3 - rhs_5
+# compute Lambda^E
 
-    return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
+LambdaE = cpeo.compute_surface_maxwell_stress(Phi.ravel(order='F'), G_x, G_y, Nx, Ny, xib, yib, 0, 0)
+
+################################
+#####  solve N*u = F(phi)  #####
+################################
 
 L = 1.0
 rad = 0.25
 size = 7
-
 size_range = range(size)
 N = np.zeros(size)
 Nib_array = np.zeros(size)
@@ -296,7 +344,7 @@ for k in size_range:
     n_x = np.cos(theta)
     n_y = np.sin(theta)
 
-    delta_x, delta_y = make_composite_deltas(dx, n=3)
+    delta_x, delta_y = cpeo.make_composite_deltas(dx, n=3)
 
     x_trunc = x[:-1]    # length Nx
     y_trunc = y[:-1]    # length Ny
@@ -345,8 +393,8 @@ for k in size_range:
             g[j, i] = compute_g(x_mid[i], y_offset[j])
             VExact[j, i] = compute_V(x_mid[i], y_offset[j])
 
-    z_x[:] = interpPhi_x(UGridX, UGridY, xib, yib, UExact, delta_x)
-    z_y[:] = interpPhi_y(VGridX, VGridY, xib, yib, VExact, delta_y)
+    z_x[:] = cpeo.interpPhi_x(UGridX, UGridY, xib, yib, UExact, delta_x)
+    z_y[:] = cpeo.interpPhi_y(VGridX, VGridY, xib, yib, VExact, delta_y)
 
     # BCs
     V_lower = -3.5
@@ -357,11 +405,11 @@ for k in size_range:
     h_bc_mat = np.zeros((Ny, Nx))
 
     # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
-    f_bc = f.ravel(order='F') + spreadQ_x(UGridX, UGridY, xib, yib, lam_x_exact, delta_x) + f_bc_mat.ravel(order='F')
+    f_bc = f.ravel(order='F') + cpeo.spreadQ_x(UGridX, UGridY, xib, yib, lam_x_exact, delta_x) + f_bc_mat.ravel(order='F')
 
     g_bc_mat[0, :] = -V_lower / dy**2
     g_bc_mat[-1, :] = -V_upper / dy**2
-    g_bc = g.ravel(order='F') + spreadQ_y(VGridX, VGridY, xib, yib, lam_y_exact, delta_y) + g_bc_mat.ravel(order='F')
+    g_bc = g.ravel(order='F') + cpeo.spreadQ_y(VGridX, VGridY, xib, yib, lam_y_exact, delta_y) + g_bc_mat.ravel(order='F')
 
     h_bc_mat[0, :] = V_lower / dy
     h_bc_mat[-1, :] = -V_upper / dy
@@ -404,11 +452,11 @@ for k in size_range:
     D_y = -G_y.transpose()
 
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    RHS_schur = schur_rhs(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
+    RHS_schur = cpeo.schur_rhs_N(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
 
     # Solve
     shape = N_P + 2 * Nib
-    SchurOp = SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib)
+    SchurOp = cpeo.SchurLinearOperator_N(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib)
     sol, info = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, x0=exact_sol, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
     # Split (no change in ordering of partition)
@@ -419,8 +467,8 @@ for k in size_range:
     #P = P - np.mean(P)
 
     # Postprocessing: compute U and V
-    U = compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc)
-    V = compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_bc)
+    U = cpeo.compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc)
+    V = cpeo.compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_bc)
 
     # Append to solution array 
     UNumericalList[0:Nx**2, k] = U
