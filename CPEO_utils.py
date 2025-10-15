@@ -8,19 +8,24 @@ from sksparse.cholmod import cholesky
 def compute_surface_maxwell_stress(Phi, G_x, G_y, Nx, Ny, Nib, xib, yib, center_x, center_y, Jop):
     G_x_Phi = G_x @ Phi
     G_y_Phi = G_y @ Phi
-
+    
     G_x_Phi_interpolated = Jop(G_x_Phi.reshape(Ny, Nx, order='F'))
     G_y_Phi_interpolated = Jop(G_y_Phi.reshape(Ny, Nx, order='F'))
 
-    Sigma_E = (G_x_Phi_interpolated) @ (G_x_Phi_interpolated) + (G_y_Phi_interpolated) @ (G_y_Phi_interpolated) - (1/2) * (np.linalg.norm([G_x_Phi_interpolated, G_y_Phi_interpolated])**2) * np.eye(Nib)
+    Lambda_E_x = np.zeros_like(xib)
+    Lambda_E_y = np.zeros_like(yib)
 
-    unit_nu_vec = []
+    for i in range(Nib):
+        nu_i = [(center_x - xib[i]), (center_y - yib[i])]
+        nu_i_normalized = nu_i / np.linalg.norm(nu_i)
 
-    for ib in range(len(xib)):
-        nu = [(center_x - xib[ib]), (center_y - yib[ib])]
-        unit_nu_vec.append(nu / np.linalg.norm(nu))
+        Grad_Phi_i = np.array([G_x_Phi_interpolated[i], G_y_Phi_interpolated[i]])
+        Sigma_E_i = np.outer(Grad_Phi_i, Grad_Phi_i) - (1/2) * np.linalg.norm(Grad_Phi_i)**2 * np.eye(2)
+        Lambda_E = Sigma_E_i @ nu_i_normalized
+        Lambda_E_x[i] = Lambda_E[0]
+        Lambda_E_y[i] = Lambda_E[1]
 
-    return Sigma_E @ np.array(unit_nu_vec)
+    return Lambda_E_x, Lambda_E_y
 
 def bspline_kernel(n, dx, normalize=True):
     """
