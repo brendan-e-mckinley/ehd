@@ -16,7 +16,7 @@ def compute_surface_maxwell_stress(Phi, G_x, G_y, Nx, Ny, Nib, xib, yib, center_
     Lambda_E_y = np.zeros_like(yib)
 
     for i in range(Nib):
-        nu_i = [(center_x - xib[i]), (center_y - yib[i])]
+        nu_i = [(xib[i] - center_x), (yib[i] - center_y)]
         nu_i_normalized = nu_i / np.linalg.norm(nu_i)
 
         Grad_Phi_i = np.array([G_x_Phi_interpolated[i], G_y_Phi_interpolated[i]])
@@ -479,7 +479,7 @@ def apply_Ainv_R(dLap, target_vec, delta_layer):
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
-def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
+def Build_RHS_rho(ctxt, ctxt_BCs, U, V, G_x, G_y, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -496,20 +496,30 @@ def Build_RHS(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, J
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
     
     dl2 = delta_layer**2
-    
+
     computed_lap = (-Lap) @ Phi
     computed_lap = computed_lap + Phi_BC
+    
+    alpha_p = 1
+    alpha_m = 1
+    U_G_x_N_p = U * (G_x @ N_p)
+    V_G_y_N_p = V * (G_y @ N_p)
+    U_G_x_N_m = U * (G_x @ N_m)
+    V_G_y_N_m = V * (G_y @ N_m)
+    
+    u_G_N_p = alpha_p * (U_G_x_N_p + V_G_y_N_p)
+    u_G_N_m = alpha_m * (U_G_x_N_m + V_G_y_N_m)
 
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p))
-    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m))
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + u_G_N_p - N_p_BC - G_d_G(Phi, N_p))
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + u_G_N_m - N_m_BC + G_d_G(Phi, N_m))
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
-def Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
+def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, G_x, G_y, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -526,13 +536,23 @@ def Build_RHS_Schur_System(ctxt, ctxt_BCs, Lap, dLap, G_d_G, delta_layer, Nx, Ny
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
     
     dl2 = delta_layer**2
-    
+
     computed_lap = (-Lap) @ Phi
     computed_lap = computed_lap + Phi_BC
+    
+    alpha_p = 1
+    alpha_m = 1
+    U_G_x_N_p = U * (G_x @ N_p)
+    V_G_y_N_p = V * (G_y @ N_p)
+    U_G_x_N_m = U * (G_x @ N_m)
+    V_G_y_N_m = V * (G_y @ N_m)
+    
+    u_G_N_p = alpha_p * (U_G_x_N_p + V_G_y_N_p)
+    u_G_N_m = alpha_m * (U_G_x_N_m + V_G_y_N_m)
 
     b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p)
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m)
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap + u_G_N_p - N_p_BC - G_d_G(Phi, N_p)
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + u_G_N_m - N_m_BC + G_d_G(Phi, N_m)
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
