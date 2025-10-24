@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.sparse import diags, kron, eye, csr_matrix, bmat
+from scipy.sparse import diags, kron, eye, csr_matrix, bmat, lil_matrix
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.interpolate import BSpline
 
@@ -236,47 +236,83 @@ def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGr
 
 L = 1.0
 rad = 0.25
-size = 7
+size = 3
 
 size_range = range(size)
 N = np.zeros(size)
 Nib_array = np.zeros(size)
 for s in size_range:
     N[s] = 15*(size_range[s] + 3)
+    #N[s] = 3 * (size_range[s] + 1)
 
 # compute Nib_max
 Nx_max = int(N[-1])
-x_max = np.linspace(0, L, Nx_max + 1)
+x_max = np.linspace(0, L, Nx_max + 2)
 dx_max = x_max[1] - x_max[0]
 dth_max = dx_max / rad
 theta_max = np.arange(0, 2*np.pi - dth_max, dth_max)
 Nib_max = len(theta_max)
 
+# -----------------------------
+# Manufactured solution (Dirichlet zero on all boundaries)
+# -----------------------------
 def compute_U(xx, yy):
-    return np.sin(2*np.pi*yy) * np.sin(2*np.pi*xx)
+    # zero on boundaries
+    return np.sin(2 * np.pi * yy) * (np.cos(2 * np.pi * xx) - 1)
 
 def compute_V(xx, yy):
-    return -3.5 + np.cos(2*np.pi*xx) * (np.cos(2*np.pi*yy) - 1)
+    # zero on boundaries
+    return np.sin(2 * np.pi * xx) * (-np.cos(2 * np.pi * yy) + 1)
+
+def compute_Lap_U(xx, yy):
+    # ∇²U = d²U/dx² + d²U/dy²
+    term_xx = - (2 * np.pi)**2 * np.sin(2 * np.pi * yy) * np.cos(2 * np.pi * xx)
+    term_yy = - (2 * np.pi)**2 * np.sin(2 * np.pi * yy) * (np.cos(2 * np.pi * xx) - 1)
+    return term_xx + term_yy
+
+def compute_Lap_V(xx, yy):
+    # ∇²V = d²V/dx² + d²V/dy²
+    term_xx = - (2 * np.pi)**2 * np.sin(2 * np.pi * xx) * (-np.cos(2 * np.pi * yy) + 1)
+    term_yy = (2 * np.pi)**2 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+    return term_xx + term_yy
+
+def compute_Dx_U(xx, yy):
+    return -2 * np.pi * np.sin(2 * np.pi * yy) * np.sin(2 * np.pi * xx)
+
+def compute_Dy_V(xx, yy):
+    return 2 * np.pi * np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 def compute_P(xx, yy):
-    return np.sin(2*np.pi*yy) * np.cos(2*np.pi*xx)
+    # pressure chosen similarly (arbitrary)
+    return np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
-UNumericalList = np.zeros((int(N[-1] * N[-1]), size))
-UExactList = np.zeros((int(N[-1] * N[-1]), size))
-PNumericalList = np.zeros((int(N[-1] * N[-1]), size))
-PExactList = np.zeros((int(N[-1] * N[-1]), size))
-VNumericalList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
-VExactList = np.zeros((int(N[-1] * (N[-1] - 1)), size))
+def compute_f(xx, yy):
+    return compute_Lap_U(xx, yy) - (2 * np.pi * np.cos(2 * np.pi * xx) * np.sin(2 * np.pi * yy))
+
+def compute_g(xx, yy):
+    return compute_Lap_V(xx, yy) - (2 * np.pi * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy))
+
+UNumericalList = np.zeros((int((N[-1] + 1) * N[-1]), size))
+UExactList = np.zeros((int((N[-1] + 1) * N[-1]), size))
+PNumericalList = np.zeros((int((N[-1] + 1) * (N[-1] + 1)), size))
+PExactList = np.zeros((int((N[-1] + 1) * (N[-1] + 1)), size))
+VNumericalList = np.zeros((int((N[-1] + 1) * N[-1]), size))
+VExactList = np.zeros((int((N[-1] + 1) * N[-1]), size))
 Lam_X_NumericalList = np.zeros((int(Nib_max), size))
 Lam_X_ExactList = np.zeros((int(Nib_max), size))
 Lam_Y_NumericalList = np.zeros((int(Nib_max), size))
 Lam_Y_ExactList = np.zeros((int(Nib_max), size))
 
+err2Norm_Lap_U_arr = np.zeros(size)
+err2Norm_Lap_V_arr = np.zeros(size)
+err2Norm_Dx_arr = np.zeros(size)
+err2Norm_Dy_arr = np.zeros(size)
+
 for k in size_range:
     # Parameters
     Nx = int(N[k])
     Ny = Nx
-    x = np.linspace(0, L, Nx + 1)
+    x = np.linspace(0, L, Nx + 2)
     dx = x[1] - x[0]
     dx2 = dx**2
     y = x.copy()
@@ -298,110 +334,195 @@ for k in size_range:
 
     delta_x, delta_y = make_composite_deltas(dx, n=3)
 
-    x_trunc = x[:-1]    # length Nx
-    y_trunc = y[:-1]    # length Ny
-    x_mid = x_trunc + dx / 2
-    y_mid = y_trunc + dy / 2
-    y_offset = y_trunc[1:]
+    x_trunc = x[1:-1]    # length Nx
+    y_trunc = y[1:-1]    # length Ny
+    x_mid = x + dx / 2
+    y_mid = y + dy / 2
+    x_offset = x_mid[:-1]
+    y_offset = y_mid[:-1]
 
-    UGridX, UGridY = np.meshgrid(x_trunc, y_mid)
-    VGridX, VGridY = np.meshgrid(x_mid, y_offset)
+    UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
+    VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
-    N_U = Nx * Ny
-    Ny_minus = Ny - 1
-    N_V = Nx * Ny_minus
-    N_P = Nx * Ny
+    N_U = (Nx + 1) * Ny
+    N_V = Nx * (Ny + 1)
+    N_P = (Nx + 1) * (Ny + 1)
 
     # RHS
-    f = np.zeros((Ny, Nx))
-    g = np.zeros((Ny_minus, Nx))
-    h = np.zeros((Ny, Nx))
+    f = np.zeros((Ny + 1, Nx))
+    g = np.zeros((Ny, Nx + 1))
+    h = np.zeros((Ny + 1, Nx + 1))
     z_x = np.zeros(Nib)
     z_y = np.zeros(Nib)
 
     # Analytic solutions
-    UExact = np.zeros((Ny, Nx))
-    VExact = np.zeros((Ny_minus, Nx))
-    PExact = np.zeros((Ny, Nx))
+    UExact = np.zeros((Ny + 1, Nx))
+    VExact = np.zeros((Ny, Nx + 1))
+    PExact = np.zeros((Ny + 1, Nx + 1))
     lam_x_exact = np.ones(Nib)
     lam_y_exact = np.ones(Nib)
 
-    exact_sol = np.concatenate([PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
+    for j in range(Ny + 1):
+        for i in range(Nx):
+            f[j, i] = compute_f(x_trunc[i], y_offset[j])
+            UExact[j, i] = compute_U(x_trunc[i], y_offset[j])
 
-    def compute_f(xx, yy):
-        return -8 * np.pi**2 * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy) + 2 * np.pi * np.sin(2*np.pi*xx) * np.sin(2*np.pi*yy)
-
-    def compute_g(xx, yy):
-        return -4 * np.pi**2 * np.cos(2*np.pi*xx) * (2 * np.cos(2*np.pi*yy) - 1) - 2 * np.pi * np.cos(2*np.pi*yy) * np.cos(2*np.pi*xx)
+    for j in range(Ny + 1):
+        for i in range(Nx + 1):
+            PExact[j, i] = compute_P(x_offset[i], y_offset[j])
 
     for j in range(Ny):
-        for i in range(Nx):
-            f[j, i] = compute_f(x_trunc[i], y_mid[j])
-            UExact[j, i] = compute_U(x_trunc[i], y_mid[j])
-            PExact[j, i] = compute_P(x_mid[i], y_mid[j])
+        for i in range(Nx + 1):
+            g[j, i] = compute_g(x_offset[i], y_trunc[j])
+            VExact[j, i] = compute_V(x_offset[i], y_trunc[j])
 
-    for j in range(Ny_minus):
-        for i in range(Nx):
-            g[j, i] = compute_g(x_mid[i], y_offset[j])
-            VExact[j, i] = compute_V(x_mid[i], y_offset[j])
+    exact_sol = np.concatenate([PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
 
     z_x[:] = interpPhi_x(UGridX, UGridY, xib, yib, UExact, delta_x)
     z_y[:] = interpPhi_y(VGridX, VGridY, xib, yib, VExact, delta_y)
 
-    # BCs
-    V_lower = -3.5
-    V_upper = -3.5
+    # Dirichlet zero on all boundaries
+    V_lower = 0.0
+    V_upper = 0.0
 
-    f_bc_mat = np.zeros((Ny, Nx))
-    g_bc_mat = np.zeros((Ny_minus, Nx))
-    h_bc_mat = np.zeros((Ny, Nx))
+    f_bc_mat = np.zeros((Ny + 1, Nx))
+    g_bc_mat = np.zeros((Ny, Nx + 1))
+    h_bc_mat = np.zeros((Ny + 1, Nx + 1))
 
-    # IMPORTANT: flatten in Fortran order to mimic MATLAB's column-major ordering
+    # Spread lamdas are included as before.
     f_bc = f.ravel(order='F') + spreadQ_x(UGridX, UGridY, xib, yib, lam_x_exact, delta_x) + f_bc_mat.ravel(order='F')
 
-    g_bc_mat[0, :] = -V_lower / dy**2
-    g_bc_mat[-1, :] = -V_upper / dy**2
+    # For V: with Dirichlet 0 on top/bottom, the previous additional terms that set ghost based values vanish:
+    # g boundary correction stays zero
+    g_bc_mat[0, :] = 0.0
+    g_bc_mat[-1, :] = 0.0
     g_bc = g.ravel(order='F') + spreadQ_y(VGridX, VGridY, xib, yib, lam_y_exact, delta_y) + g_bc_mat.ravel(order='F')
 
-    h_bc_mat[0, :] = V_lower / dy
-    h_bc_mat[-1, :] = -V_upper / dy
+    # h_bc (ghost flux-like vector) zero for Dirichlet
+    h_bc_mat[0, :] = 0.0
+    h_bc_mat[-1, :] = 0.0
     h_bc = h_bc_mat.ravel(order='F')
 
-    # 1-D operators
-    # x-direction (periodic)
+    # 1-D operators (Dirichlet in x, Dirichlet in y via zero ghosts)
+    # assumes Nx = Ny
+    e_p = np.ones(Nx + 1)
     e = np.ones(Nx)
-    D2_x = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
-    D2_x[0, -1] = 1.0
-    D2_x[-1, 0] = 1.0
-    D2_x = (D2_x / dx2).tocsr()
+    D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
+    D2_p[0, 0] = -3.0
+    D2_p[-1, -1] = -3.0
+    D2_p = (D2_p / dx2).tocsr()
 
-    # y-direction for U (includes ghost treatment -> -3 on boundaries)
-    ey = np.ones(Ny)
-    D2_y_U = diags([ey, -2*ey, ey], offsets=[-1, 0, 1], shape=(Ny, Ny), format='lil')
-    D2_y_U[0, 0] = -3.0
-    D2_y_U[-1, -1] = -3.0
-    D2_y_U = (D2_y_U / dy**2).tocsr()
-
-    # y-direction for V (interior Ny-1 points)
-    ev = np.ones(Ny_minus)
-    D2_y_V = diags([ev, -2*ev, ev], offsets=[-1, 0, 1], shape=(Ny_minus, Ny_minus), format='csr') / dy**2
+    D2 = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
+    D2 = (D2 / dx2).tocsr()
 
     # Laplacians (Kronecker products)
-    Lap_U = kron(D2_x, eye(Ny, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_U, format='csr')
-    Lap_V = kron(D2_x, eye(Ny_minus, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_y_V, format='csr')
+    Lap_U = kron(D2, eye(Ny + 1, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_p, format='csr')
+    Lap_V = kron(D2_p, eye(Ny, format='csr'), format='csr') + kron(eye(Nx + 1, format='csr'), D2, format='csr')
 
-    # Gradients
-    Dx_b = diags([np.ones(Nx), -np.ones(Nx)], offsets=[0, -1], shape=(Nx, Nx), format='lil')
-    Dx_b[0, -1] = -1.0  # periodic: U[0] uses P[0] - P[Nx-1]
-    D_x_backward = (Dx_b / dx).tocsr()
-    G_x = kron(D_x_backward, eye(Ny, format='csr'), format='csr')
+    # check Laplacians
+    computed_Lap_U = Lap_U @ UExact.ravel(order='F')
+    computed_Lap_V = Lap_V @ VExact.ravel(order='F')
 
-    D_y_small = diags([-np.ones(Ny_minus), np.ones(Ny_minus)], offsets=[0, 1], shape=(Ny_minus, Ny), format='csr') / dy
-    G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
+    exact_Lap_U = np.zeros([Ny + 1, Nx])
+    exact_Lap_V = np.zeros([Ny, Nx + 1])
+    # compare with actual laplacian
+    for j in range(Ny + 1):
+        for i in range(Nx):
+            exact_Lap_U[j, i] = compute_Lap_U(x_trunc[i], y_offset[j])
+    for j in range(Ny):
+        for i in range(Nx + 1):
+            exact_Lap_V[j, i] = compute_Lap_V(x_offset[i], y_trunc[j])
 
-    # Divergence (note signs)
-    D_x = -G_x.transpose()
-    D_y = -G_y.transpose()
+    err2Norm_Lap_U = np.linalg.norm(exact_Lap_U.ravel(order='F') - computed_Lap_U, ord=2) / np.linalg.norm(exact_Lap_U.ravel(order='F'), ord=2)
+    err2Norm_Lap_V = np.linalg.norm(exact_Lap_V.ravel(order='F') - computed_Lap_V, ord=2) / np.linalg.norm(exact_Lap_V.ravel(order='F'), ord=2)
+
+    err2Norm_Lap_U_arr[k] = err2Norm_Lap_U
+    err2Norm_Lap_V_arr[k] = err2Norm_Lap_V
+
+    # # --- 1D backward-difference stencil ---
+    # D_1d = diags([-1 * np.ones(Nx), np.ones(Nx)], [0, -1], shape=(Nx + 1, Nx), format='lil') / dx
+
+    # # --- 2D Kronecker structure ---
+    # # Fortran ordering: x varies fastest
+    # Ix = eye(Nx + 1, format='csr')
+    # Iy = eye(Ny + 1, format='csr')
+
+    # D_x = kron(Ix, D_1d.tocsr(), format='csr')
+    # D_y = kron(D_1d.tocsr(), Iy, format='csr')
+
+    # Dx_1d = diags([-1*np.ones(Nx+1), np.ones(Nx+1)], [0, -1], shape=(Nx+1, Nx)) / dx
+    # # shape: (Nx+1, Nx) → maps U_x (Nx) to pressure (Nx+1)
+
+    # # kron with identity along y (Ny+1 rows)
+    # D_y = kron(eye(Ny+1, format='csr'), Dx_1d, format='csr')
+
+    # Dy_1d = diags([np.ones(Ny+1), -1*np.ones(Ny+1)], [1, 0], shape=(Ny+1, Ny)) / dy
+    # # shape: (Ny+1, Ny) → maps V_y (Ny) to pressure (Ny+1)
+
+    # # kron with identity along x (Nx+1 columns)
+    # D_x = kron(Dy_1d, eye(Nx+1, format='csr'), format='csr')  # shape (N_P, N_V)
+
+    # G_x = -D_x.transpose().tocsr()
+    # G_y = -D_y.transpose().tocsr()
+
+    # def build_Dx_1d(Nx, dx):
+    #     D = lil_matrix((Nx+1, Nx), dtype=float)
+    #     # interior rows 1..Nx-1
+    #     for i in range(1, Nx):
+    #         D[i, i] = 1.0/dx
+    #         D[i, i-1] = -1.0/dx
+    #     # row 0 and row Nx: choose ghost/BC consistent values (example below)
+    #     D[0, 0] = 1.0/dx         # placeholder
+    #     D[Nx, Nx-1] = -1.0/dx    # placeholder
+    #     return D.tocsr()
+
+    # def build_Dy_1d(Ny, dy):
+    #     D = lil_matrix((Ny+1, Ny), dtype=float)
+    #     for j in range(1, Ny):
+    #         D[j, j] = 1.0/dy
+    #         D[j, j-1] = -1.0/dy
+    #     D[0, 0] = 1.0/dy
+    #     D[Ny, Ny-1] = -1.0/dy
+    #     return D.tocsr()
+
+    # Dy_1d = build_Dx_1d(Nx, dx)
+    # D_y = kron(eye(Nx+1, format='csr'), Dy_1d, format='csr')
+    # Dx_1d = build_Dy_1d(Ny, dy)
+    # D_x = kron(Dx_1d, eye(Ny+1, format='csr'), format='csr')
+    # G_x = -D_x.transpose().tocsr()
+    # G_y = -D_y.transpose().tocsr()
+
+    Dy_b = diags([np.ones(Ny + 1), -np.ones(Ny + 1)], offsets=[0, -1], shape=(Ny + 1, Ny))
+    D_y_backward = Dy_b / dx
+    D_y = kron(eye(Nx + 1, format='csr'), D_y_backward, format='csr')
+
+    # --- X-direction forward difference ---
+    Dx_f = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
+    D_x_forward = Dx_f / dy
+    D_x = kron(D_x_forward, eye(Ny + 1, format='csr'), format='csr')
+
+    G_x = -D_x.copy().T
+    G_y = -D_y.copy().T
+
+    # check Divergence operators
+    computed_Dx_U = D_x @ UExact.ravel(order='F')
+    computed_Dy_V = D_y @ VExact.ravel(order='F')
+
+    exact_Dx_U = np.zeros([Ny + 1, Nx + 1])
+    exact_Dy_V = np.zeros([Ny + 1, Nx + 1])
+    # compare with actual laplacian
+    for j in range(Ny + 1):
+        for i in range(Nx + 1):
+            exact_Dx_U[j, i] = compute_Dx_U(x_offset[i], y_offset[j])
+    for j in range(Ny + 1):
+        for i in range(Nx + 1):
+            exact_Dy_V[j, i] = compute_Dy_V(x_offset[i], y_offset[j])
+
+    err2Norm_Dx_U = np.linalg.norm(exact_Dx_U.ravel(order='F') - computed_Dx_U, ord=2) / np.linalg.norm(exact_Dx_U.ravel(order='F'), ord=2)
+    err2Norm_Dy_V = np.linalg.norm(exact_Dy_V.ravel(order='F') - computed_Dy_V, ord=2) / np.linalg.norm(exact_Dy_V.ravel(order='F'), ord=2)
+
+    err2Norm_Dx_arr[k] = err2Norm_Dx_U
+    err2Norm_Dy_arr[k] = err2Norm_Dy_V
 
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
     RHS_schur = schur_rhs(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
@@ -416,39 +537,35 @@ for k in size_range:
     lam_X = sol[N_P:N_P + Nib]
     lam_Y = sol[N_P + Nib:]
 
-    #P = P - np.mean(P)
+    P = P - np.mean(P)
 
     # Postprocessing: compute U and V
     U = compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc)
     V = compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_bc)
 
     # Append to solution array 
-    UNumericalList[0:Nx**2, k] = U
-    VNumericalList[0:Nx * (Ny - 1), k] = V
-    PNumericalList[0:Nx**2, k] = P
+    UNumericalList[0:(Nx + 1) * Ny, k] = U
+    VNumericalList[0:Nx * (Ny + 1), k] = V
+    PNumericalList[0:(Nx + 1) * (Nx + 1), k] = P
     Lam_X_NumericalList[0:Nib, k] = lam_X
     Lam_Y_NumericalList[0:Nib, k] = lam_Y
-    UExactList[0:Nx**2, k] = UExact.ravel(order='F')
-    VExactList[0:Nx * (Ny - 1), k] = VExact.ravel(order='F')
-    PExactList[0:Nx**2, k] = PExact.ravel(order='F')
+    UExactList[0:(Nx + 1) * Ny, k] = UExact.ravel(order='F')
+    VExactList[0:Nx * (Ny + 1), k] = VExact.ravel(order='F')
+    PExactList[0:(Nx + 1) * (Nx + 1), k] = PExact.ravel(order='F')
     Lam_X_ExactList[0:Nib, k] = lam_x_exact
     Lam_Y_ExactList[0:Nib, k] = lam_y_exact
 
     # Reshape back using Fortran order to match MATLAB layout
-    Uplot = U.reshape((Ny, Nx), order='F')
-    Vplot = V.reshape((Ny_minus, Nx), order='F')
-    Pplot = P.reshape((Ny, Nx), order='F')
+    Uplot = U.reshape((Ny + 1, Nx), order='F')
+    Vplot = V.reshape((Ny, Nx + 1), order='F')
+    Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
 
-    # Build full arrays with ghost rows/cols similar to MATLAB
-    UFull = np.full((Ny + 2, Nx + 2), np.nan)
-    UFull[1:Ny + 1, 1:Nx + 1] = Uplot
-    UFull[0, :] = UFull[1, :]
-    UFull[-1, :] = UFull[-2, :]
+    # Build full arrays with ghost rows/cols similar to MATLAB, but Dirichlet zero ghosts
+    UFull = np.zeros((Ny + 2, Nx + 2))
+    UFull[1:Ny + 2, 1:Nx + 1] = Uplot
 
-    VFull = V_lower * np.ones((Ny + 2, Nx + 2))
-    VFull[1:Ny, 1:Nx + 1] = Vplot
-    VFull[:,0] = VFull[:,1]
-    VFull[:,-1] = VFull[:,-2]
+    VFull = np.zeros((Ny + 2, Nx + 2))
+    VFull[1:Ny + 1, 1:Nx + 2] = Vplot
 
 # Check errors
 err2Norm_U = np.zeros(size)
@@ -457,9 +574,9 @@ err2Norm_P = np.zeros(size)
 err2Norm_Lam_X = np.zeros(size)
 err2Norm_Lam_Y = np.zeros(size)
 for i in size_range:
-    err2Norm_U[i] = np.linalg.norm(UExactList[0:int(N[i]**2), i] - UNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(UExactList[0:int(N[i]**2),i], ord=2)
-    err2Norm_V[i] = np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)), i] - VNumericalList[0:int(N[i]*(N[i]-1)), i], ord=2) / np.linalg.norm(VExactList[0:int(N[i]*(N[i]-1)),i], ord=2)
-    err2Norm_P[i] = np.linalg.norm(PExactList[0:int(N[i]**2), i] - PNumericalList[0:int(N[i]**2), i], ord=2) / np.linalg.norm(PExactList[0:int(N[i]**2),i], ord=2)
+    err2Norm_U[i] = np.linalg.norm(UExactList[0:int((N[i] + 1) * N[i]), i] - UNumericalList[0:int((N[i] + 1) * N[i]), i], ord=2) / np.linalg.norm(UExactList[0:int((N[i] + 1) * N[i]),i], ord=2)
+    err2Norm_V[i] = np.linalg.norm(VExactList[0:int((N[i] + 1) * N[i]), i] - VNumericalList[0:int((N[i] + 1) * N[i]), i], ord=2) / np.linalg.norm(VExactList[0:int((N[i] + 1) * N[i]),i], ord=2)
+    err2Norm_P[i] = np.linalg.norm(PExactList[0:int((N[i] + 1) * (N[i] + 1)), i] - PNumericalList[0:int((N[i] + 1) * (N[i] + 1)), i], ord=2) / np.linalg.norm(PExactList[0:int((N[i] + 1) * (N[i] + 1)),i], ord=2)
     err2Norm_Lam_X[i] = np.linalg.norm(Lam_X_ExactList[0:int(Nib_array[i]), i] - Lam_X_NumericalList[0:int(Nib_array[i]), i], ord=2) / np.linalg.norm(Lam_X_ExactList[0:int(Nib_array[i]), i], ord=2)
     err2Norm_Lam_Y[i] = np.linalg.norm(Lam_Y_ExactList[0:int(Nib_array[i]), i] - Lam_Y_NumericalList[0:int(Nib_array[i]), i], ord=2) / np.linalg.norm(Lam_Y_ExactList[0:int(Nib_array[i]), i], ord=2) 
 
@@ -475,6 +592,21 @@ print("V rates:", rates(err2Norm_V))
 print("P rates:", rates(err2Norm_P))
 print("Lam_X rates:", rates(err2Norm_Lam_X))
 print("Lam_Y rates:", rates(err2Norm_Lam_Y))
+
+plt.figure(figsize=(6,5))
+plt.loglog(N, err2Norm_Lap_U_arr, '--o', label=r'$L_U$')
+plt.loglog(N, err2Norm_Lap_V_arr, '--o', label=r'$L_V$')
+plt.loglog(N, err2Norm_Dx_arr, '--o', label=r'$D_x$')
+plt.loglog(N, err2Norm_Dy_arr, '--o', label=r'$D_y$')
+plt.loglog(N, h**2, '--', label='2nd order')
+plt.xlabel(r'$N$', fontsize=22)
+plt.ylabel(r'$Err$', fontsize=22)
+plt.title(r'Relative error of $u_n(x, y)$, $p=2$ norm', fontsize=22)
+plt.legend(fontsize=22, loc='upper right')  # matplotlib uses "upper right"
+
+plt.grid(True, which="both", ls="--", lw=0.5)
+plt.tight_layout()
+plt.show()
 
 plt.figure(figsize=(6,5))
 plt.loglog(N, err2Norm_U, '--o', label=r'$Err_U$')
