@@ -10,6 +10,7 @@ from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
 import CPEO_utils as cpeo
+import stokes_solver_utils as stokes
 
 #######################################
 #####  solve R*phi = rho(u, phi)  #####
@@ -58,8 +59,25 @@ dLap = cholesky(Lap) # Cholesky decomposition
 # D_y_small = diags([-np.ones(Ny), np.ones(Ny)], offsets=[0, 1], shape=(Ny, Ny), format='csr') / dy
 # G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
 
-D_y_small = diags([-np.ones(Ny), np.ones(Ny)], offsets=[0, 1], shape=(Ny, Ny), format='csr') / dy
-D_x_small = diags([-np.ones(Nx), np.ones(Nx)], offsets=[0, 1], shape=(Nx, Nx), format='csr') / dx
+def periodic_diff_x(Nx, dx):
+    e = np.ones(Nx)
+    D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Nx, Nx), format='lil') / dx
+    D[0, -1] = -0.5/dx     # wrap: f_{i-1} at i=0 -> f_{N-1}
+    D[-1, 0] = 0.5/dx      # wrap: f_{i+1} at i=N-1 -> f_{0}
+    return D.tocsr()
+
+# --- centered periodic difference in y ---
+def periodic_diff_y(Ny, dy):
+    e = np.ones(Ny)
+    D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Ny, Ny), format='lil') / dy
+    D[0, -1] = -0.5/dy
+    D[-1, 0] = 0.5/dy
+    return D.tocsr()
+
+# Build operators
+D_x_small = periodic_diff_x(Nx, dx)
+D_y_small = periodic_diff_y(Ny, dy)
+
 G_x = kron(D_x_small, eye(Ny, format='csr'), format='csr')
 G_y = kron(eye(Nx, format='csr'), D_y_small, format='csr')
 
@@ -298,7 +316,7 @@ for its in range(100000):
         print('Converged!')
         break
 
-ctxt_R = u_next.copy()
+ctxt = u_next.copy()
 
 # verify residudal
 residual_check_RHS = b_Op(u_next, U_fluid, V_fluid)
@@ -324,7 +342,7 @@ dy = dx
 
 cut = 6 * 1.2 * dx # cutoff value
 
-delta_x, delta_y = cpeo.make_composite_deltas(dx, n=3)
+delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
 
 x_trunc = x[1:-1]    # length Nx
 y_trunc = y[1:-1]    # length Ny
@@ -347,81 +365,48 @@ V_upper = 0
 # RHS
 f = -cpeo.spreadQ_x(UGridX, UGridY, xib, yib, LambdaE_x, delta_x)
 g = -cpeo.spreadQ_y(VGridX, VGridY, xib, yib, LambdaE_y, delta_y)
-h = np.zeros((Ny + 1, Nx + 1))
+h_bc = np.zeros((Ny + 1, Nx + 1)).ravel(order='F')
 z_x = np.zeros(Nib)
 z_y = np.zeros(Nib)
 
 f_bc_mat = np.zeros((Ny + 1, Nx))
 g_bc_mat = np.zeros((Ny, Nx + 1))
-h_bc_mat = np.zeros((Ny + 1, Nx + 1))
 
 f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
-
-g_bc_mat[0, :] = -V_lower / dy**2
-g_bc_mat[-1, :] = -V_upper / dy**2
 g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-h_bc_mat[0, :] = V_lower / dy
-h_bc_mat[-1, :] = -V_upper / dy
-h_bc = h.ravel(order='F') + h_bc_mat.ravel(order='F')
+Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
+G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
 
-# 1-D operators (Dirichlet in x, Dirichlet in y via zero ghosts)
-# assumes Nx = Ny
-e_p = np.ones(Nx + 1)
-e = np.ones(Nx)
-D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
-D2_p[0, 0] = -3.0
-D2_p[-1, -1] = -3.0
-D2_p = (D2_p / dx2).tocsr()
+U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol)
 
-D2 = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
-D2 = (D2 / dx2).tocsr()
-
-# Laplacians (Kronecker products)
-Lap_U = kron(D2, eye(Ny + 1, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_p, format='csr')
-Lap_V = kron(D2_p, eye(Ny, format='csr'), format='csr') + kron(eye(Nx + 1, format='csr'), D2, format='csr')
-
-Dy_b = diags([np.ones(Ny + 1), -np.ones(Ny + 1)], offsets=[0, -1], shape=(Ny + 1, Ny))
-D_y_backward = Dy_b / dx
-D_y_staggered = kron(eye(Nx + 1, format='csr'), D_y_backward, format='csr')
-
-# --- X-direction forward difference ---
-Dx_f = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
-D_x_forward = Dx_f / dy
-D_x_staggered = kron(D_x_forward, eye(Ny + 1, format='csr'), format='csr')
-
-G_x_staggered = -D_x_staggered.copy().T
-G_y_staggered = -D_y_staggered.copy().T
-
-RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-RHS_schur = cpeo.schur_rhs_N(RHS, Lap_U, Lap_V, D_x_staggered, D_y_staggered, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
-
-# Solve
-shape = N_P + 2 * Nib
-SchurOp = cpeo.SchurLinearOperator_N(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, N_P, Nib)
-sol, info = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
-
-# Split (no change in ordering of partition)
-P = sol[:N_P]
-lam_X = sol[N_P:N_P + Nib]
-lam_Y = sol[N_P + Nib:]
-
-P = P - np.mean(P)
-
-# Postprocessing: compute U and V
-U = cpeo.compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x_staggered, delta_x, f_bc)
-V = cpeo.compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y_staggered, delta_y, g_bc)
+#P = P - np.mean(P)
 
 Uplot = U.reshape((Ny + 1, Nx), order='F')
 Vplot = V.reshape((Ny, Nx + 1), order='F')
 Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
 
+U_interpolated = np.zeros([Ny, Nx])
+V_interpolated = np.zeros([Ny, Nx])
+for col_index in range(Uplot.shape[1]):
+    col = Uplot[:, col_index]
+    for row_index in range(len(col) - 1):
+        midpoint = (col[row_index] + col[row_index+1]) / 2
+        U_interpolated[row_index, col_index] = midpoint
+
+
+for row_index in range(Vplot.shape[0]):
+    row = Vplot[row_index, :]
+    for col_index in range(len(row) - 1):
+        midpoint = (row[col_index] + row[col_index+1]) / 2
+        V_interpolated[row_index, col_index] = midpoint
+
 # Build full arrays with ghost rows/cols similar to MATLAB, but Dirichlet zero ghosts
 UFull = np.zeros((Ny + 2, Nx + 2))
-UFull[1:Ny + 2, 1:Nx + 1] = Uplot
+UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
 
 VFull = np.zeros((Ny + 2, Nx + 2))
-VFull[1:Ny + 1, 1:Nx + 2] = Vplot
+VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
 
 xplot = np.linspace(-L/2, L/2, Nx + 2)
 yplot = np.linspace(-L/2, L/2, Ny + 2)
@@ -472,8 +457,8 @@ plt.ylim(-2, 2)
 plt.grid(True)
 plt.show()
 
-U_fluid = (UFull[1:Nx+1,1:Ny+1]).ravel(order='F')
-V_fluid = (VFull[1:Nx+1,1:Ny+1]).ravel(order='F')
+U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 
 # full system loop
 for its in range(100000):
@@ -508,7 +493,7 @@ for its in range(100000):
     err = []
 
     # Anderson acceleration loop
-    for its in range(100000):
+    for inner_its in range(100000):
         schurRHS = b_Op_Schur(u_next, U_fluid, V_fluid)
         computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
         
@@ -516,12 +501,12 @@ for its in range(100000):
         p_n = cpeo.solve_from_svd(U, Sigma, Vh, computedRHS)
         G_u_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
-        m_n = min(m, its + 1)
+        m_n = min(m, inner_its + 1)
         
         # Store differences
-        if its < m:
-            DU[:, its] = u_next - u_n
-            DG[:, its] = G_u_next - G_u_n
+        if inner_its < m:
+            DU[:, inner_its] = u_next - u_n
+            DG[:, inner_its] = G_u_next - G_u_n
         else:
             DU = np.roll(DU, -1, axis=1)
             DG = np.roll(DG, -1, axis=1)
@@ -558,14 +543,16 @@ for its in range(100000):
         
         err.append(err_curr)
         
-        print(f'Iteration {its}: residual = {err_curr}')
+        print(f'Iteration {inner_its}: residual = {err_curr}')
         
         if err_curr < 1e-4:
             print('Rphi = rho Converged!')
             break
 
         # compute Lambda^E
-
+    
+    ctxt = u_next.copy()
+    
     LambdaE_x, LambdaE_y = cpeo.compute_surface_maxwell_stress(Phi.ravel(order='F'), G_x, G_y, Nx, Ny, Nib, xib, yib, 0, 0, Jop)
 
     ################################
@@ -578,40 +565,39 @@ for its in range(100000):
 
     f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
     g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
-    h_bc = h.ravel(order='F') + h_bc_mat.ravel(order='F')
 
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    RHS_schur = cpeo.schur_rhs_N(RHS, Lap_U, Lap_V, D_x_staggered, D_y_staggered, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
 
-    # Solve
-    shape = N_P + 2 * Nib
-    SchurOp = cpeo.SchurLinearOperator_N(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, N_P, Nib)
-    sol, info = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
+    U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol)
 
-    # Split (no change in ordering of partition)
-    P = sol[:N_P]
-    lam_X = sol[N_P:N_P + Nib]
-    lam_Y = sol[N_P + Nib:]
-
-    P = P - np.mean(P)
-
-    # Postprocessing: compute U and V
-    U = cpeo.compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x_staggered, delta_x, f_bc)
-    V = cpeo.compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y_staggered, delta_y, g_bc)
-
+    #P = P - np.mean(P)
     Uplot = U.reshape((Ny + 1, Nx), order='F')
     Vplot = V.reshape((Ny, Nx + 1), order='F')
     Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
 
+    U_interpolated = np.zeros([Ny, Nx])
+    V_interpolated = np.zeros([Ny, Nx])
+    for col_index in range(Uplot.shape[1]):
+        col = Uplot[:, col_index]
+        for row_index in range(len(col) - 1):
+            midpoint = (col[row_index] + col[row_index+1]) / 2
+            U_interpolated[row_index, col_index] = midpoint
+
+    for row_index in range(Vplot.shape[0]):
+        row = Vplot[row_index, :]
+        for col_index in range(len(row) - 1):
+            midpoint = (row[col_index] + row[col_index+1]) / 2
+            V_interpolated[row_index, col_index] = midpoint
+
     # Build full arrays with ghost rows/cols similar to MATLAB, but Dirichlet zero ghosts
     UFull = np.zeros((Ny + 2, Nx + 2))
-    UFull[1:Ny + 2, 1:Nx + 1] = Uplot
+    UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
 
     VFull = np.zeros((Ny + 2, Nx + 2))
-    VFull[1:Ny + 1, 1:Nx + 2] = Vplot
+    VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
 
-    U_fluid = (UFull[1:Nx+1,1:Ny+1]).ravel(order='F')
-    V_fluid = (VFull[1:Nx+1,1:Ny+1]).ravel(order='F')
+    U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+    V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 
     residual_check_RHS = b_Op(u_next, U_fluid, V_fluid)
     residual_check_AxOp = AxOp(u_next)
@@ -623,10 +609,22 @@ for its in range(100000):
         break
 
 # check full residual 
-u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
-Nu = cpeo.apply_N(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered)
+u_tilde = np.concatenate([U.ravel(order='F'), V.ravel(order='F'), P.ravel(order='F'), lam_X, lam_Y])
+Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered)
 residual_check_N = np.linalg.norm(Nu - RHS) / np.linalg.norm(RHS)
 print(f'New residual Nu = {residual_check_N}')
+
+# figure out where residual is worst
+offset = 0
+residual_check_U = np.linalg.norm(Nu[:N_U] - RHS[:N_U]) / np.linalg.norm(RHS[:N_U])
+offset += N_U
+residual_check_V = np.linalg.norm(Nu[offset:offset + N_V] - RHS[offset:offset + N_V]) / np.linalg.norm(RHS[offset:offset + N_V])
+offset += N_V
+residual_check_P = np.linalg.norm(Nu[offset:offset + N_P] - RHS[offset:offset + N_P]) / np.linalg.norm(RHS[offset:offset + N_P])
+offset += N_P
+residual_check_lam_X = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
+offset += Nib
+residual_check_lam_Y = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
 
 # Define circular mask (radius 0.25 centered at origin)
 radius = 0.25
@@ -644,4 +642,17 @@ plt.title('Flow Field Streamline Plot')
 plt.xlim(-2, 2)
 plt.ylim(-2, 2)
 plt.grid(True)
+
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xplot, Yplot, UFull, cmap=cmap, edgecolor='none')
+ax.set_title("U")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xplot, Yplot, VFull, cmap=cmap, edgecolor='none')
+ax.set_title("V")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 plt.show()
