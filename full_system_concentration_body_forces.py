@@ -69,16 +69,55 @@ def periodic_diff_x(Nx, dx):
 def periodic_diff_y(Ny, dy):
     e = np.ones(Ny)
     D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Ny, Ny), format='lil') / dy
-    D[0, -1] = -0.5/dy
-    D[-1, 0] = 0.5/dy
+    # D[0, -1] = -0.5/dy
+    # D[-1, 0] = 0.5/dy
     return D.tocsr()
 
 # Build operators
-D_x_small_full = periodic_diff_x(Nx + 2, dx)
-D_y_small_full = periodic_diff_y(Ny + 2, dy)
+#D_x_small_full = periodic_diff_x(Nx + 2, dx)
+#D_y_small_full = periodic_diff_y(Ny + 2, dy)
 
-G_x_full = kron(D_x_small_full, eye(Ny + 2, format='csr'), format='csr')
-G_y_full = kron(eye(Nx + 2, format='csr'), D_y_small_full, format='csr')
+D_x_full = diags(
+    [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
+    offsets=[-1, 1],
+    shape=(Nx, Nx + 2)
+).tocsr()
+D_y_full = diags(
+    [-0.5/dy * np.ones(Ny),  0.5/dy * np.ones(Ny)],
+    offsets=[-1,  1],
+    shape=(Ny, Ny + 2),
+    format='csr'
+)
+
+# Full 2D operator, column-major ordering
+G_x_full = kron(D_x_full, eye(Ny + 2, format='csr'), format='csr')
+G_y_full = kron(eye(Nx + 2, format='csr'), D_y_full,format='csr')
+
+D_x_full_nodes = diags(
+    [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
+    offsets=[-1, 1],
+    shape=(Nx, Nx + 2),
+    format='csr'
+)
+
+D_y_full_nodes = diags(
+    [-0.5/dy * np.ones(Ny), 0.5/dy * np.ones(Ny)],
+    offsets=[-1,  1],
+    shape=(Ny, Ny + 2),
+    format='csr'
+)
+
+# Selector matrices that remove boundaries:
+S_y = eye(Ny + 2, format='csr')[1:-1, :]   # (Ny) × (Ny+2)
+S_x = eye(Nx + 2, format='csr')[1:-1, :]   # (Nx) × (Nx+2)
+
+# 2D gradient operators (Phi_full is flattened in Fortran order)
+G_x_full_nodes = kron(D_x_full_nodes, S_y, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
+G_y_full_nodes = kron(S_x, D_y_full_nodes, format='csr')
+
+# plt.spy(G_x_full_nodes)
+# plt.spy(G_y_full_nodes)
+# plt.show()
 
 # Build operators
 D_x_small = periodic_diff_x(Nx, dx)
@@ -168,10 +207,10 @@ def G_d_G(Phi, N_pm):
     return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
 def b_Op_Schur(ctxt, U_fluid, V_fluid):
-    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, G_x, G_y, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
+    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, G_x_full_nodes, G_y_full_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
 def b_Op(ctxt, U_fluid, V_fluid):
-    return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, U_fluid, V_fluid, G_x, G_y, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime)
+    return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, U_fluid, V_fluid, G_x_full_nodes, G_y_full_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
 def AxOp(ctxt):
     return cpeo.Constrained_Lap(ctxt, ctxt, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
@@ -337,8 +376,8 @@ Nm_full = np.ones((Ny+2, Nx+2))
 Phi_full[1:-1, 1:-1] = Phi
 Phi_full[1:-1, 0] = Phi[:, -1]
 Phi_full[1:-1, -1] = Phi[:, -1]
-Phi_full[0, 1:-1] = -25
-Phi_full[-1, 1:-1] = 25
+Phi_full[0, :] = -25
+Phi_full[-1, :] = 25
 Np_full[1:-1, 1:-1] = Np
 Nm_full[1:-1, 1:-1] = Nm
 
@@ -366,17 +405,18 @@ plt.show()
 Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
 Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
 
-bodyForces_x = (Np_full.ravel(order='F') - Nm_full.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-bodyForces_y = (Np_full.ravel(order='F') - Nm_full.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+Np_relevant_y = Np_full[1:-1,:]
+Nm_relevant_y = Nm_full[1:-1,:]
+Np_relevant_x = Np_full[:,1:-1]
+Nm_relevant_x = Nm_full[:,1:-1]
 
-body_x = bodyForces_x.reshape(Ny + 2, Nx + 2, order='F')
-body_y = bodyForces_y.reshape(Ny + 2, Nx + 2, order='F')
+bodyForces_x = (Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
+bodyForces_y = (Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
 
-mid_rows_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
-body_interpolated_x = mid_rows_x[:, slice(1, -1)]
-
-mid_rows_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
-body_interpolated_y = mid_rows_y[slice(1, -1),:]
+body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
+body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
+body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
+body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
 
 # --- Corners (average of nearest ghost neighbors) ---
 # body_full[0, 0]     = 0.5 * (body_full[0, 1] + body_full[1, 0])
@@ -436,6 +476,32 @@ Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
 G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
 
 U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol)
+
+# # check Nu residual 
+# Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
+# u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
+# Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered)
+# residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
+# print(f'residual Nu = {residual_check_N}')
+
+# # figure out where residual is worst
+# offset = 0
+# residual_check_U = np.linalg.norm(Nu[:N_U] - Nu_RHS[:N_U]) / np.linalg.norm(Nu_RHS[:N_U])
+# for i in range(Nx):
+#     relevantNu = Nu[i*Nx:i*Nx+Nx]
+#     relevantRHS = Nu_RHS[i*Nx:i*Nx+Nx]
+#     residual_check = np.linalg.norm(relevantNu - relevantRHS) / np.linalg.norm(relevantRHS)
+#     if residual_check > 1e-5:
+#         print(f'high residual: {residual_check}')
+# offset += N_U
+# residual_check_V = np.linalg.norm(Nu[offset:offset + N_V] - Nu_RHS[offset:offset + N_V]) / np.linalg.norm(Nu_RHS[offset:offset + N_V])
+# offset += N_V
+# residual_check_P = np.linalg.norm(Nu[offset:offset + N_P] - Nu_RHS[offset:offset + N_P])
+# offset += N_P
+# residual_check_lam_X = np.linalg.norm(Nu[offset:offset + Nib] - Nu_RHS[offset:offset + Nib])
+# offset += Nib
+# residual_check_lam_Y = np.linalg.norm(Nu[offset:offset + Nib] - Nu_RHS[offset:offset + Nib])
+
 
 #P = P - np.mean(P)
 
@@ -643,17 +709,18 @@ for its in range(100000):
     Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
     Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
 
-    bodyForces_x = (Np_full.ravel(order='F') - Nm_full.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-    bodyForces_y = (Np_full.ravel(order='F') - Nm_full.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+    Np_relevant_x = Np_full[1:-1,:]
+    Nm_relevant_x = Nm_full[1:-1,:]
+    Np_relevant_y = Np_full[:,1:-1]
+    Nm_relevant_y = Nm_full[:,1:-1]
 
-    body_x = bodyForces_x.reshape(Ny + 2, Nx + 2, order='F')
-    body_y = bodyForces_y.reshape(Ny + 2, Nx + 2, order='F')
+    bodyForces_x = (Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
+    bodyForces_y = (Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
 
-    mid_rows_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
-    body_interpolated_x = mid_rows_x[:, slice(1, -1)]
-
-    mid_rows_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
-    body_interpolated_y = mid_rows_y[slice(1, -1),:]
+    body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
+    body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
+    body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
+    body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
 
     ################################
     #####  solve N*u = F(phi)  #####
@@ -665,8 +732,6 @@ for its in range(100000):
 
     f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
     g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
-
-    RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
 
     U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol)
 
@@ -708,23 +773,30 @@ for its in range(100000):
         print('Full system converged!')
         break
 
-# check full residual 
-u_tilde = np.concatenate([U.ravel(order='F'), V.ravel(order='F'), P.ravel(order='F'), lam_X, lam_Y])
+# check Nu residual 
+Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
+u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
 Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered)
-residual_check_N = np.linalg.norm(Nu - RHS) / np.linalg.norm(RHS)
+residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
 print(f'New residual Nu = {residual_check_N}')
 
+# check system residual
+full_system_operator_applied = np.concatenate([Nu, residual_check_AxOp])
+full_system_RHS = np.concatenate([Nu_RHS, residual_check_RHS])
+residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_RHS) / np.linalg.norm(full_system_RHS)
+print(f'Full residual = {residual_check_full}')
+
 # figure out where residual is worst
-offset = 0
-residual_check_U = np.linalg.norm(Nu[:N_U] - RHS[:N_U]) / np.linalg.norm(RHS[:N_U])
-offset += N_U
-residual_check_V = np.linalg.norm(Nu[offset:offset + N_V] - RHS[offset:offset + N_V]) / np.linalg.norm(RHS[offset:offset + N_V])
-offset += N_V
-residual_check_P = np.linalg.norm(Nu[offset:offset + N_P] - RHS[offset:offset + N_P]) / np.linalg.norm(RHS[offset:offset + N_P])
-offset += N_P
-residual_check_lam_X = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
-offset += Nib
-residual_check_lam_Y = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
+# offset = 0
+# residual_check_U = np.linalg.norm(Nu[:N_U] - RHS[:N_U]) / np.linalg.norm(RHS[:N_U])
+# offset += N_U
+# residual_check_V = np.linalg.norm(Nu[offset:offset + N_V] - RHS[offset:offset + N_V]) / np.linalg.norm(RHS[offset:offset + N_V])
+# offset += N_V
+# residual_check_P = np.linalg.norm(Nu[offset:offset + N_P] - RHS[offset:offset + N_P]) / np.linalg.norm(RHS[offset:offset + N_P])
+# offset += N_P
+# residual_check_lam_X = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
+# offset += Nib
+# residual_check_lam_Y = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
 
 # Define circular mask (radius 0.25 centered at origin)
 radius = 0.25
