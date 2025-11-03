@@ -799,12 +799,12 @@ print(f'Full residual = {residual_check_full}')
 # residual_check_lam_Y = np.linalg.norm(Nu[offset:offset + Nib] - RHS[offset:offset + Nib]) / np.linalg.norm(RHS[offset:offset + Nib])
 
 # Define circular mask (radius 0.25 centered at origin)
-radius = 0.25
-mask = (Xplot**2 + Yplot**2) <= radius**2
+# radius = 0.25
+# mask = (Xplot**2 + Yplot**2) <= radius**2
 
-# Apply mask to UFull and VFull
-UFull[mask] = np.nan
-VFull[mask] = np.nan
+# # Apply mask to UFull and VFull
+# UFull[mask] = np.nan
+# VFull[mask] = np.nan
 
 plt.figure(figsize=(8, 6))
 plt.streamplot(Xplot, Yplot, UFull, VFull, color='red', density=10, linewidth=1, arrowsize=1.5)
@@ -827,4 +827,11 @@ ax = fig.add_subplot(111, projection="3d")
 ax.plot_surface(Xplot, Yplot, VFull, cmap=cmap, edgecolor='none')
 ax.set_title("V")
 ax.set_xlabel("x"); ax.set_ylabel("y")
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xplot, Yplot, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
+ax.set_title("|velocity|")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
 plt.show()
