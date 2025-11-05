@@ -709,10 +709,10 @@ for its in range(100000):
     Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
     Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
 
-    Np_relevant_x = Np_full[1:-1,:]
-    Nm_relevant_x = Nm_full[1:-1,:]
-    Np_relevant_y = Np_full[:,1:-1]
-    Nm_relevant_y = Nm_full[:,1:-1]
+    Np_relevant_y = Np_full[1:-1,:]
+    Nm_relevant_y = Nm_full[1:-1,:]
+    Np_relevant_x = Np_full[:,1:-1]
+    Nm_relevant_x = Nm_full[:,1:-1]
 
     bodyForces_x = (Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
     bodyForces_y = (Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
