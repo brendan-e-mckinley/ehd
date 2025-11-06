@@ -3,9 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.sparse import diags, kron, eye, csr_matrix, bmat, lil_matrix
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.interpolate import BSpline
-
-import numpy as np
-from scipy.interpolate import BSpline
+from numba import jit
 
 def bspline_kernel(n, dx, normalize=True):
     """
@@ -63,76 +61,138 @@ def make_composite_deltas(dx, n=3):
 
     return delta_x, delta_y
 
-def interpPhi_x(Xu, Yu, xq, yq, U, delta_x):
+def interpPhi_x(Xu, Yu, xq, yq, U, delta_x, cut):
     """
     Interpolate u(x,y) from staggered x-face grid (Xu, Yu)
-    to Lagrangian points (xq, yq) using composite δ_x.
+    to Lagrangian points (xq, yq) using composite δ_x with local support.
     """
     if U.ndim == 1:
         U = U.reshape(Xu.shape, order='F')
 
     Jphi = np.zeros_like(xq)
-    dx = Xu[0, 1] - Xu[0, 0]
-    dy = Yu[1, 0] - Yu[0, 0]
+    dx = Xu[0,1] - Xu[0,0]
+    dy = Yu[1,0] - Yu[0,0]
+    Ny, Nx = Xu.shape
 
     for k in range(len(xq)):
-        phi = delta_x(Xu, Yu, xq[k], yq[k])
-        Jphi[k] = dx * dy * np.sum(U * phi)
+        xk, yk = xq[k], yq[k]
+
+        # Local index domain
+        i_min = max(int((xk - cut - Xu[0,0]) / dx), 0)
+        i_max = min(int((xk + cut - Xu[0,0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Yu[0,0]) / dy), 0)
+        j_max = min(int((yk + cut - Yu[0,0]) / dy) + 1, Ny)
+
+        Xloc = Xu[j_min:j_max, i_min:i_max]
+        Yloc = Yu[j_min:j_max, i_min:i_max]
+        Uloc = U[j_min:j_max, i_min:i_max]
+
+        # Same delta usage as original
+        phi = delta_x(Xloc, Yloc, xk, yk)
+
+        Jphi[k] = dx * dy * np.sum(Uloc * phi)
 
     return Jphi
 
-def interpPhi_y(Xv, Yv, xq, yq, V, delta_y):
+
+def interpPhi_y(Xv, Yv, xq, yq, V, delta_y, cut):
     """
     Interpolate v(x,y) from staggered y-face grid (Xv, Yv)
-    to Lagrangian points (xq, yq) using composite δ_y.
+    to Lagrangian points (xq, yq) using composite δ_y with local support.
     """
     if V.ndim == 1:
         V = V.reshape(Xv.shape, order='F')
 
     Jphi = np.zeros_like(xq)
-    dx = Xv[0, 1] - Xv[0, 0]
-    dy = Yv[1, 0] - Yv[0, 0]
+    dx = Xv[0,1] - Xv[0,0]
+    dy = Yv[1,0] - Yv[0,0]
+    Ny, Nx = Xv.shape
 
     for k in range(len(xq)):
-        phi = delta_y(Xv, Yv, xq[k], yq[k])
-        Jphi[k] = dx * dy * np.sum(V * phi)
+        xk, yk = xq[k], yq[k]
+
+        i_min = max(int((xk - cut - Xv[0,0]) / dx), 0)
+        i_max = min(int((xk + cut - Xv[0,0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Yv[0,0]) / dy), 0)
+        j_max = min(int((yk + cut - Yv[0,0]) / dy) + 1, Ny)
+
+        Xloc = Xv[j_min:j_max, i_min:i_max]
+        Yloc = Yv[j_min:j_max, i_min:i_max]
+        Vloc = V[j_min:j_max, i_min:i_max]
+
+        phi = delta_y(Xloc, Yloc, xk, yk)
+
+        Jphi[k] = dx * dy * np.sum(Vloc * phi)
 
     return Jphi
 
-def spreadQ_x(Xu, Yu, xq, yq, qx, delta_x):
+def spreadQ_x(Xu, Yu, xq, yq, qx, delta_x, cut):
     """
-    Spread Lagrangian x-forces qx (force per unit length)
-    to Eulerian x-face grid (Xu, Yu) using composite δ_x.
+    Spread Lagrangian x-forces qx to Eulerian x-face grid (Xu, Yu)
+    using composite δ_x with local support (same delta call signature).
     """
     Fx = np.zeros_like(Xu)
 
+    # approximate segment length
     xp = np.asarray(xq)
     yp = np.asarray(yq)
     dxs = np.sqrt(np.diff(np.concatenate([xp, xp[:1]]))**2 +
-                np.diff(np.concatenate([yp, yp[:1]]))**2)
+                  np.diff(np.concatenate([yp, yp[:1]]))**2)
     ds = np.mean(dxs)
 
+    dx = Xu[0,1] - Xu[0,0]
+    dy = Yu[1,0] - Yu[0,0]
+    Ny, Nx = Xu.shape
+
     for k in range(len(qx)):
-        Fx += qx[k] * delta_x(Xu, Yu, xq[k], yq[k]) * ds
+        xk, yk = xq[k], yq[k]
+
+        i_min = max(int((xk - cut - Xu[0,0]) / dx), 0)
+        i_max = min(int((xk + cut - Xu[0,0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Yu[0,0]) / dy), 0)
+        j_max = min(int((yk + cut - Yu[0,0]) / dy) + 1, Ny)
+
+        Xloc = Xu[j_min:j_max, i_min:i_max]
+        Yloc = Yu[j_min:j_max, i_min:i_max]
+
+        phi = delta_x(Xloc, Yloc, xk, yk)
+
+        Fx[j_min:j_max, i_min:i_max] += qx[k] * phi * ds
 
     return Fx.ravel(order='F')
 
 
-def spreadQ_y(Xv, Yv, xq, yq, qy, delta_y):
+def spreadQ_y(Xv, Yv, xq, yq, qy, delta_y, cut):
     """
-    Spread Lagrangian y-forces qy (force per unit length)
-    to Eulerian y-face grid (Xv, Yv) using composite δ_y.
+    Spread Lagrangian y-forces qy to Eulerian y-face grid (Xv, Yv)
+    using composite δ_y with local support (same delta call signature).
     """
     Fy = np.zeros_like(Xv)
 
     xp = np.asarray(xq)
     yp = np.asarray(yq)
     dxs = np.sqrt(np.diff(np.concatenate([xp, xp[:1]]))**2 +
-                np.diff(np.concatenate([yp, yp[:1]]))**2)
+                  np.diff(np.concatenate([yp, yp[:1]]))**2)
     ds = np.mean(dxs)
 
+    dx = Xv[0,1] - Xv[0,0]
+    dy = Yv[1,0] - Yv[0,0]
+    Ny, Nx = Xv.shape
+
     for k in range(len(qy)):
-        Fy += qy[k] * delta_y(Xv, Yv, xq[k], yq[k]) * ds
+        xk, yk = xq[k], yq[k]
+
+        i_min = max(int((xk - cut - Xv[0,0]) / dx), 0)
+        i_max = min(int((xk + cut - Xv[0,0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Yv[0,0]) / dy), 0)
+        j_max = min(int((yk + cut - Yv[0,0]) / dy) + 1, Ny)
+
+        Xloc = Xv[j_min:j_max, i_min:i_max]
+        Yloc = Yv[j_min:j_max, i_min:i_max]
+
+        phi = delta_y(Xloc, Yloc, xk, yk)
+
+        Fy[j_min:j_max, i_min:i_max] += qy[k] * phi * ds
 
     return Fy.ravel(order='F')
 
@@ -143,7 +203,7 @@ def AxLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, d
         return apply_A(unknowns, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
     return LinearOperator((n, n), matvec=mv)
 
-def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y):
+def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut):
     U = x[0:N_U]
     offset = N_U
     V = x[offset:offset + N_V]
@@ -155,25 +215,25 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, 
     Lam_Y = x[offset:offset + Nib]
 
     res = np.zeros_like(x)
-    res[0:N_U] = Lap_U @ U - G_x @ P + spreadQ_x(UGridX, UGridY, xib, yib, Lam_X, delta_x)
+    res[0:N_U] = Lap_U @ U - G_x @ P + spreadQ_x(UGridX, UGridY, xib, yib, Lam_X, delta_x, cut)
     offset = N_U
-    res[offset:offset + N_V] = Lap_V @ V - G_y @ P + spreadQ_y(VGridX, VGridY, xib, yib, Lam_Y, delta_y)
+    res[offset:offset + N_V] = Lap_V @ V - G_y @ P + spreadQ_y(VGridX, VGridY, xib, yib, Lam_Y, delta_y, cut)
     offset = offset + N_V
     res[offset:offset + N_P] = D_x @ U + D_y @ V
     offset = offset + N_P
-    res[offset:offset + Nib] = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x)
+    res[offset:offset + Nib] = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
     offset = offset + Nib
-    res[offset:offset + Nib] = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y)
+    res[offset:offset + Nib] = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y, cut)
     
     return res
 
-def SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib):
+def SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib, cut):
     n = shape
     def mv(unknowns):
         unknown_P = unknowns[:N_P]
         unknown_Lam_x = unknowns[N_P:N_P + Nib]
         unknown_Lam_y = unknowns[N_P + Nib:N_P + 2*Nib]
-        return apply_Schur([unknown_P, unknown_Lam_x, unknown_Lam_y], UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
+        return apply_Schur([unknown_P, unknown_Lam_x, unknown_Lam_y], UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut)
     return LinearOperator((n, n), matvec=mv)
 
 def apply_Ainv(Lap_U, Lap_V, target_vec):
@@ -185,34 +245,34 @@ def apply_Ainv(Lap_U, Lap_V, target_vec):
 
     return [result_vec_1, result_vec_2]
 
-def apply_Schur(unknown_blocks, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y):
+def apply_Schur(unknown_blocks, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut):
     Pi, Lam_x, Lam_y = unknown_blocks
 
     # apply B 
-    B_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x) - G_x @ Pi
-    B_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y) - G_y @ Pi
+    B_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut) - G_x @ Pi
+    B_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut) - G_y @ Pi
 
     # apply A inverse 
     Ainv_B_U, Ainv_B_V = apply_Ainv(Lap_U, Lap_V, [B_U, B_V])
 
     # apply C 
     res_1 = D_x @ Ainv_B_U + D_y @ Ainv_B_V
-    res_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_B_U, delta_x)
-    res_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_B_V, delta_y)
+    res_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_B_U, delta_x, cut)
+    res_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_B_V, delta_y, cut)
 
     return np.concatenate([res_1, res_2, res_3])
 
-def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC):
-    RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x)
+def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC, cut):
+    RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
     U = spsolve(Lap_U, RHS)
     return U
     
-def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_BC):
-    RHS = g_BC + G_y @ Pi - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y)
+def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_BC, cut):
+    RHS = g_BC + G_y @ Pi - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut)
     V = spsolve(Lap_V, RHS)
     return V
 
-def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib):
+def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib, cut):
     rhs_1 = rhs[0:N_U]
     offset = N_U
     rhs_2 = rhs[offset:offset + N_V]
@@ -225,8 +285,8 @@ def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGr
 
     Ainv_U, Ainv_V = apply_Ainv(Lap_U, Lap_V, [rhs_1, rhs_2])
     CAinv_1 = D_x @ Ainv_U + D_y @ Ainv_V
-    CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x)
-    CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y)
+    CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x, cut)
+    CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y, cut)
 
     schur_rhs_1 = CAinv_1 - rhs_3
     schur_rhs_2 = CAinv_2 - rhs_4
@@ -269,8 +329,18 @@ def build_staggered_Grads_Divs(Nx, dx):
 
     return G_x, G_y, D_x, D_y
 
+# @jit(nopython=True)
+# def solve_from_svd(U, Sigma, Vh, rhs):
+#     Sigma_inv_diag = 1 / Sigma
+
+#     Sigma_inv = np.diag(Sigma_inv_diag)
+
+#     res = Vh.conj().T @ Sigma_inv @ U.T @ rhs
+
+#     return res
+
 # solve the system, assumes Dirichlet boundaries = 0 for x and y dimensions
-def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol):
+def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut):
     x = np.linspace(left_bound, right_bound, Nx + 2)
     dx = x[1] - x[0]
     y = x.copy()
@@ -280,13 +350,15 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol):
     dth = dx / rad
     theta = np.arange(0, 2*np.pi - dth, dth)
     Nib = len(theta)
-    xib = 0.5 + rad * np.cos(theta) 
-    yib = 0.5 + rad * np.sin(theta)
+    xib = rad * np.cos(theta) 
+    yib = rad * np.sin(theta)
+    # xib = 0.5 + rad * np.cos(theta) 
+    # yib = 0.5 + rad * np.sin(theta)
 
     # IB
-    Nib = len(theta)
-    xib = 0.5 + rad * np.cos(theta) 
-    yib = 0.5 + rad * np.sin(theta)
+    # Nib = len(theta)
+    # xib = 0.5 + rad * np.cos(theta) 
+    # yib = 0.5 + rad * np.sin(theta)
 
     delta_x, delta_y = make_composite_deltas(dx, n=3)
 
@@ -308,12 +380,29 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol):
     G_x, G_y, D_x, D_y = build_staggered_Grads_Divs(Nx, dx)
 
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    RHS_schur = schur_rhs(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
+    RHS_schur = schur_rhs(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib, cut)
 
     # Solve
     shape = N_P + 2 * Nib
     SchurOp = SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib)
     sol, info = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
+
+    # # Solve using dense Schur matrix
+    # shape = N_P + 2 * Nib
+    # schurDense = np.zeros((shape, shape))
+    # for col in range(shape): 
+    #     eye_mat = np.zeros(shape)
+    #     eye_mat[col] = 1
+    #     eye_P = eye_mat[:N_P]
+    #     eye_Lam_x = eye_mat[N_P:N_P + Nib]
+    #     eye_Lam_y = eye_mat[N_P + Nib:]
+    #     res = apply_Schur([eye_P, eye_Lam_x, eye_Lam_y], UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut)
+    #     schurDense[:,col] = res
+
+    # # Compute SVD once
+    # U, Sigma, Vh = np.linalg.svd(schurDense)
+
+    # sol = solve_from_svd(U, Sigma, Vh, RHS_schur)
 
     # Split (no change in ordering of partition)
     P = sol[:N_P]
@@ -323,8 +412,13 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol):
     #P = P - np.mean(P)
 
     # Postprocessing: compute U and V
-    U = compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc)
-    V = compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_bc)
+    U = compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc, cut)
+    V = compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_bc, cut)
+
+    # # COMPUTE USING FULL OPERATOR CHECK
+    # Nu = apply_A(np.concatenate([U, V, P, lam_X, lam_Y]), UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut)
+    # residual_check_N = np.linalg.norm(Nu - RHS) / np.linalg.norm(RHS)
+    # print(f'residual Nu = {residual_check_N}')
 
     return U, V, P, lam_X, lam_Y
 
