@@ -419,10 +419,14 @@ G_u_next = G_u_n.copy()
 
 # full system loop
 for its in range(100000):
-    G_u_n = np.concatenate([u_solved, phi_solved])
     m_n = min(m, its + 1)
-    
-    # Store differences
+
+    G_u_next = np.concatenate([u_solved, phi_solved])  # CONSISTENT G(u_n)
+
+    # 2) Compute f_n
+    f_n = G_u_next - u_n
+
+    # 3) Store history
     if its < m:
         DU[:, its] = u_next - u_n
         DG[:, its] = G_u_next - G_u_n
@@ -431,32 +435,28 @@ for its in range(100000):
         DG = np.roll(DG, -1, axis=1)
         DU[:, -1] = u_next - u_n
         DG[:, -1] = G_u_next - G_u_n
-    
-    f_n = G_u_next - u_next
+
     DF = DG[:, :m_n] - DU[:, :m_n]
-    
-    # QR decomposition
-    #Q_qr, R_qr = qr(DF, mode='economic')
-    #gamma = np.linalg.solve(R_qr, Q_qr.T @ f_n)
-    gamma, residuals, rank, s = lstsq(DF, f_n)
-    
+
+    # 4) Solve least squares
+    gamma, *_ = lstsq(DF, f_n)
+
+    # 5) Update iterate (THIS IS THE NEW u)
+    u_next = G_u_next - DG[:, :m_n] @ gamma - (1-beta)*(f_n - DF @ gamma)
+
+    # 6) Shift
     u_n = u_next.copy()
     G_u_n = G_u_next.copy()
     
-    u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
-
-    u_tilde_next = u_next[:len(u_solved)]
-    phi_tilde_next = u_next[len(u_solved):]
-    
     # Extract solution components
-    Phi = phi_tilde_next[:Ny*Nx].reshape((Ny, Nx), order='F')
-    Np = phi_tilde_next[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
-    Nm = phi_tilde_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
+    Phi = phi_solved[:Ny*Nx].reshape((Ny, Nx), order='F')
+    Np = phi_solved[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
+    Nm = phi_solved[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
     # p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
     # p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
     # p_m = u_next[3*Nx*Ny+2*Nib:]
-    U = u_tilde_next[:(Ny+1)*Nx]
-    V = u_tilde_next[(Ny+1)*Nx:(Ny+1)*Nx + Ny*(Nx+1)]
+    U = u_solved[:(Ny+1)*Nx]
+    V = u_solved[(Ny+1)*Nx:(Ny+1)*Nx + Ny*(Nx+1)]
 
     Uplot = U.reshape((Ny + 1, Nx), order='F')
     Vplot = V.reshape((Ny, Nx + 1), order='F')
@@ -519,16 +519,16 @@ for its in range(100000):
     g = body_interpolated_y.ravel(order='F')
     
     rhs_F = np.concatenate([f, g, h_bc, z_x, z_y])
-    rhs_rho = b_Op_Schur(phi_tilde_next, U_fluid, V_fluid)
+    rhs_rho = b_Op_Schur(phi_solved, U_fluid, V_fluid)
 
-    residual_check_RHS = b_Op(phi_tilde_next, U_fluid, V_fluid)
-    residual_check_AxOp = AxOp(phi_tilde_next)
+    residual_check_RHS = b_Op(phi_solved, U_fluid, V_fluid)
+    residual_check_AxOp = AxOp(phi_solved)
     residual_check_R = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
     print(f'New residual Rphi = {residual_check_R}')
 
     # check Nu residual 
     Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    u_tilde = u_tilde_next
+    u_tilde = u_solved
     Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered)
     residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
     print(f'New residual Nu = {residual_check_N}')

@@ -294,9 +294,9 @@ for its in range(100000):
     u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
     
     # Extract solution components
-    Phi = u_next[:Ny*Nx].reshape(Ny, Nx)
-    Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx)
-    Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx)
+    Phi = u_next[:Ny*Nx].reshape((Ny, Nx), order='F')
+    Np = u_next[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
+    Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
     p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
     p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
     p_m = u_next[3*Nx*Ny+2*Nib:]
@@ -527,9 +527,9 @@ for its in range(100000):
         u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
         
         # Extract solution components
-        Phi = u_next[:Ny*Nx].reshape(Ny, Nx)
-        Np = u_next[Ny*Nx:2*Nx*Ny].reshape(Ny, Nx)
-        Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape(Ny, Nx)
+        Phi = u_next[:Ny*Nx].reshape((Ny, Nx), order='F')
+        Np = u_next[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
+        Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
         p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
         p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
         p_m = u_next[3*Nx*Ny+2*Nib:]

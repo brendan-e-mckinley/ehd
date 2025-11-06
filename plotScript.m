@@ -6,7 +6,7 @@ set(0,'defaultAxesFontSize',35)
 
 clear;clc;
 
-ld = load('Err_Run_Schur.mat');
+ld = load('Full_System_Results.mat');
 
 Phi = ld.Phi';
 Np = ld.Np';
@@ -81,11 +81,29 @@ fill3(xib_cover, yib_cover, zeros(size(xib_cover)) + 2, customColor_Nm, 'FaceAlp
 plot3(xib, yib, zeros(size(xib)) + 2, 'k.', 'MarkerSize', 6);
 plot3(xib_closed, yib_closed, zeros(size(xib_closed)) + 2, '-', 'Color', customColor_Np, 'LineWidth', 2);
 
+Npm = Np - Nm;
+
+fig3 = figure(3);
+set(fig3, 'Position', [100 100 600 600]);  % same square size
+Npm_plot = surf(Xint,Yint,Npm);
+set(Npm_plot,'facealpha',0.8);
+xlabel('x'); ylabel('y');
+xlim([-pi/6 pi/6]); ylim([-pi/6 pi/6]);
+title('$$n_+ - n_-$$','Interpreter','latex');
+colormap(slanCM('spring'));
+colorbar; caxis([0.9 1.3]);
+view(0, 90)
+shading interp
+hold on 
+fill3(xib_cover, yib_cover, zeros(size(xib_cover)) + 2, customColor_Nm, 'FaceAlpha', 1, 'EdgeColor', 'none');
+plot3(xib, yib, zeros(size(xib)) + 2, 'k.', 'MarkerSize', 6);
+plot3(xib_closed, yib_closed, zeros(size(xib_closed)) + 2, '-', 'Color', customColor_Np, 'LineWidth', 2);
+
 axis equal
 pbaspect([1 1 1])
 hold off
 
-figure(3);
+figure(4);
 Phi_plot = surf(Xint,Yint,Phi);
 set(Phi_plot,'facealpha',0.8);
 xlabel('x');

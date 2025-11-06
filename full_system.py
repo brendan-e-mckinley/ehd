@@ -369,8 +369,6 @@ h_bc = h.ravel(order='F') + h_bc_mat.ravel(order='F')
 # x-direction (periodic)
 e = np.ones(Nx)
 D2_x = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
-D2_x[0, -1] = 1.0
-D2_x[-1, 0] = 1.0
 D2_x = (D2_x / dx2).tocsr()
 
 # y-direction for U (includes ghost treatment -> -3 on boundaries)
@@ -390,7 +388,7 @@ Lap_V = kron(D2_x, eye(Ny_minus, format='csr'), format='csr') + kron(eye(Nx, for
 
 # Gradients
 Dx_b = diags([np.ones(Nx), -np.ones(Nx)], offsets=[0, -1], shape=(Nx, Nx), format='lil')
-Dx_b[0, -1] = -1.0  # periodic: U[0] uses P[0] - P[Nx-1]
+#Dx_b[0, -1] = -1.0  # periodic: U[0] uses P[0] - P[Nx-1]
 D_x_backward = (Dx_b / dx).tocsr()
 G_x_staggered = kron(D_x_backward, eye(Ny, format='csr'), format='csr')
 
@@ -654,7 +652,15 @@ for its in range(100000):
 u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
 Nu = cpeo.apply_N(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x, D_y)
 residual_check_N = np.linalg.norm(Nu - RHS) / np.linalg.norm(RHS)
-print(f'New residual Nu = {residual_check}')
+print(f'New residual Nu = {residual_check_N}')
+
+# Define circular mask (radius 0.25 centered at origin)
+radius = 0.25
+mask = (Xplot**2 + Yplot**2) <= radius**2
+
+# Apply mask to UFull and VFull
+UFull[mask] = np.nan
+VFull[mask] = np.nan
 
 plt.figure(figsize=(8, 6))
 plt.streamplot(Xplot, Yplot, UFull, VFull, color='red', density=10, linewidth=1, arrowsize=1.5)

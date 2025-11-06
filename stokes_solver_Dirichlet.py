@@ -149,31 +149,31 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, 
     V = x[offset:offset + N_V]
     offset = offset + N_V
     P = x[offset:offset + N_P]
-    offset = offset + N_P
-    Lam_X = x[offset:offset + Nib]
-    offset = offset + Nib
-    Lam_Y = x[offset:offset + Nib]
+    # offset = offset + N_P
+    # Lam_X = x[offset:offset + Nib]
+    # offset = offset + Nib
+    # Lam_Y = x[offset:offset + Nib]
 
     res = np.zeros_like(x)
-    res[0:N_U] = Lap_U @ U - G_x @ P + spreadQ_x(UGridX, UGridY, xib, yib, Lam_X, delta_x)
+    res[0:N_U] = Lap_U @ U - G_x @ P #+ spreadQ_x(UGridX, UGridY, xib, yib, Lam_X, delta_x)
     offset = N_U
-    res[offset:offset + N_V] = Lap_V @ V - G_y @ P + spreadQ_y(VGridX, VGridY, xib, yib, Lam_Y, delta_y)
+    res[offset:offset + N_V] = Lap_V @ V - G_y @ P #+ spreadQ_y(VGridX, VGridY, xib, yib, Lam_Y, delta_y)
     offset = offset + N_V
     res[offset:offset + N_P] = D_x @ U + D_y @ V
-    offset = offset + N_P
-    res[offset:offset + Nib] = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x)
-    offset = offset + Nib
-    res[offset:offset + Nib] = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y)
+    # offset = offset + N_P
+    # res[offset:offset + Nib] = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x)
+    # offset = offset + Nib
+    # res[offset:offset + Nib] = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y)
     
     return res
 
 def SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib):
     n = shape
     def mv(unknowns):
-        unknown_P = unknowns[:N_P]
-        unknown_Lam_x = unknowns[N_P:N_P + Nib]
-        unknown_Lam_y = unknowns[N_P + Nib:N_P + 2*Nib]
-        return apply_Schur([unknown_P, unknown_Lam_x, unknown_Lam_y], UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
+        #unknown_P = unknowns[:N_P]
+        # unknown_Lam_x = unknowns[N_P:N_P + Nib]
+        # unknown_Lam_y = unknowns[N_P + Nib:N_P + 2*Nib]
+        return apply_Schur(unknowns, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y)
     return LinearOperator((n, n), matvec=mv)
 
 def apply_Ainv(Lap_U, Lap_V, target_vec):
@@ -186,29 +186,29 @@ def apply_Ainv(Lap_U, Lap_V, target_vec):
     return [result_vec_1, result_vec_2]
 
 def apply_Schur(unknown_blocks, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y):
-    Pi, Lam_x, Lam_y = unknown_blocks
+    Pi = unknown_blocks
 
     # apply B 
-    B_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x) - G_x @ Pi
-    B_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y) - G_y @ Pi
+    B_U = -G_x @ Pi
+    B_V = -G_y @ Pi
 
     # apply A inverse 
     Ainv_B_U, Ainv_B_V = apply_Ainv(Lap_U, Lap_V, [B_U, B_V])
 
     # apply C 
     res_1 = D_x @ Ainv_B_U + D_y @ Ainv_B_V
-    res_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_B_U, delta_x)
-    res_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_B_V, delta_y)
+    # res_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_B_U, delta_x)
+    # res_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_B_V, delta_y)
 
-    return np.concatenate([res_1, res_2, res_3])
+    return res_1#, res_2, res_3])
 
 def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC):
-    RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x)
+    RHS = f_BC + G_x @ Pi #- spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x)
     U = spsolve(Lap_U, RHS)
     return U
     
 def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_BC):
-    RHS = g_BC + G_y @ Pi - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y)
+    RHS = g_BC + G_y @ Pi #- spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y)
     V = spsolve(Lap_V, RHS)
     return V
 
@@ -218,21 +218,21 @@ def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGr
     rhs_2 = rhs[offset:offset + N_V]
     offset = offset + N_V
     rhs_3 = rhs[offset:offset + N_P]
-    offset = offset + N_P
-    rhs_4 = rhs[offset:offset + Nib]
-    offset = offset + Nib
-    rhs_5 = rhs[offset:offset + Nib]
+    # offset = offset + N_P
+    # rhs_4 = rhs[offset:offset + Nib]
+    # offset = offset + Nib
+    # rhs_5 = rhs[offset:offset + Nib]
 
     Ainv_U, Ainv_V = apply_Ainv(Lap_U, Lap_V, [rhs_1, rhs_2])
     CAinv_1 = D_x @ Ainv_U + D_y @ Ainv_V
-    CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x)
-    CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y)
+    # CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x)
+    # CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y)
 
     schur_rhs_1 = CAinv_1 - rhs_3
-    schur_rhs_2 = CAinv_2 - rhs_4
-    schur_rhs_3 = CAinv_3 - rhs_5
+    # schur_rhs_2 = CAinv_2 - rhs_4
+    # schur_rhs_3 = CAinv_3 - rhs_5
 
-    return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
+    return schur_rhs_1#, schur_rhs_2, schur_rhs_3))
 
 L = 1.0
 rad = 0.25
@@ -258,37 +258,43 @@ Nib_max = len(theta_max)
 # -----------------------------
 def compute_U(xx, yy):
     # zero on boundaries because sin(pi*0)=sin(pi*1)=0
-    return np.sin(np.pi * xx) * np.sin(np.pi * yy)
+    return np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 def compute_V(xx, yy):
     # same form (could be different), also zero on boundaries
-    return np.sin(np.pi * xx) * np.sin(np.pi * yy)
+    return np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 def compute_P(xx, yy):
     # pressure chosen similarly (arbitrary)
-    return np.sin(np.pi * xx) * np.sin(np.pi * yy)
+    return np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 # For PDE: Delta(u) - d/dx P = f, Delta(v) - d/dy P = g
 def compute_f(xx, yy):
     # Laplacian of sin(pi x) sin(pi y) = -2*pi^2 * sin(pi x) sin(pi y)
     # d/dx P = pi * cos(pi x) * sin(pi y)
-    return -2 * (np.pi**2) * np.sin(np.pi * xx) * np.sin(np.pi * yy) - (np.pi * np.cos(np.pi * xx) * np.sin(np.pi * yy))
+    return -8 * (np.pi**2) * np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy) - (2 * np.pi * np.cos(2 * np.pi * xx) * np.sin(2 * np.pi * yy))
 
 def compute_g(xx, yy):
     # d/dy P = pi * sin(pi x) * cos(pi y)
-    return -2 * (np.pi**2) * np.sin(np.pi * xx) * np.sin(np.pi * yy) - (np.pi * np.sin(np.pi * xx) * np.cos(np.pi * yy))
+    return -8 * (np.pi**2) * np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy) - (2 * np.pi * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy))
 
 def compute_Lap_U(xx, yy):
-    return -2 * (np.pi**2) * np.sin(np.pi * xx) * np.sin(np.pi * yy)
+    return -8 * (np.pi**2) * np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 def compute_Lap_V(xx, yy):
-    return -2 * (np.pi**2) * np.sin(np.pi * xx) * np.sin(np.pi * yy)
+    return -8 * (np.pi**2) * np.sin(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 def compute_Dx_U(xx, yy):
-    return np.pi * np.cos(np.pi * xx) * np.sin(np.pi * yy)
+    return 2 * np.pi * np.cos(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
 
 def compute_Dy_V(xx, yy):
-    return np.pi * np.sin(np.pi * xx) * np.cos(np.pi * yy)
+    return 2 * np.pi * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+
+def compute_Gx_P(xx, yy):
+    return 2 * np.pi * np.cos(2 * np.pi * xx) * np.sin(2 * np.pi * yy)
+
+def compute_Gy_P(xx, yy):
+    return 2 * np.pi * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
 
 
 UNumericalList = np.zeros((int((N[-1] + 1) * N[-1]), size))
@@ -306,6 +312,8 @@ err2Norm_Lap_U_arr = np.zeros(size)
 err2Norm_Lap_V_arr = np.zeros(size)
 err2Norm_Dx_arr = np.zeros(size)
 err2Norm_Dy_arr = np.zeros(size)
+err2Norm_Gx_arr = np.zeros(size)
+err2Norm_Gy_arr = np.zeros(size)
 
 for k in size_range:
     # Parameters
@@ -375,7 +383,7 @@ for k in size_range:
             g[j, i] = compute_g(x_offset[i], y_trunc[j])
             VExact[j, i] = compute_V(x_offset[i], y_trunc[j])
 
-    exact_sol = np.concatenate([PExact.ravel(order='F'), lam_x_exact, lam_y_exact])
+    exact_sol = PExact.ravel(order='F')
 
     z_x[:] = interpPhi_x(UGridX, UGridY, xib, yib, UExact, delta_x)
     z_y[:] = interpPhi_y(VGridX, VGridY, xib, yib, VExact, delta_y)
@@ -464,40 +472,71 @@ for k in size_range:
     # G_x = -D_x.transpose().tocsr()
     # G_y = -D_y.transpose().tocsr()
 
-    def build_Dx_1d(Nx, dx):
-        D = lil_matrix((Nx+1, Nx), dtype=float)
-        # interior rows 1..Nx-1
-        for i in range(1, Nx):
-            D[i, i] = 1.0/dx
-            D[i, i-1] = -1.0/dx
-        # row 0 and row Nx: choose ghost/BC consistent values (example below)
-        D[0, 0] = 1.0/dx         # placeholder
-        D[Nx, Nx-1] = -1.0/dx    # placeholder
-        return D.tocsr()
+    # # Gradients
+    # Dx_b = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx), format='lil')
+    # D_x_backward = (Dx_b / dx).tocsr()
+    # G_x = kron(D_x_backward, eye(Ny + 1, format='csr'), format='csr')
 
-    def build_Dy_1d(Ny, dy):
-        D = lil_matrix((Ny+1, Ny), dtype=float)
-        for j in range(1, Ny):
-            D[j, j] = 1.0/dy
-            D[j, j-1] = -1.0/dy
-        D[0, 0] = 1.0/dy
-        D[Ny, Ny-1] = -1.0/dy
-        return D.tocsr()
+    # Dy_f = diags([-np.ones(Ny + 1), np.ones(Ny + 1)], offsets=[0, 1], shape=(Ny, Ny + 1), format='lil')
+    # D_y_forward = (Dy_f  / dy).tocsr()
+    # G_y = kron(eye(Nx + 1, format='csr'), D_y_forward, format='csr')
 
-    Dy_1d = build_Dx_1d(Nx, dx)
-    D_y = kron(eye(Nx+1, format='csr'), Dy_1d, format='csr')
-    Dx_1d = build_Dy_1d(Ny, dy)
-    D_x = kron(Dx_1d, eye(Ny+1, format='csr'), format='csr')
-    G_x = -D_x.transpose().tocsr()
-    G_y = -D_y.transpose().tocsr()
+    # # Divergence (note signs)
+    # D_x = -G_x.transpose()
+    # D_y = -G_y.transpose()
+
+    # def build_Dx_1d(Nx, dx):
+    #     D = lil_matrix((Nx+1, Nx), dtype=float)
+    #     # interior rows 1..Nx-1
+    #     for i in range(1, Nx):
+    #         D[i, i] = 1.0/dx
+    #         D[i, i-1] = -1.0/dx
+    #     # row 0 and row Nx: choose ghost/BC consistent values (example below)
+    #     D[0, 0] = 2.0/dx         # placeholder
+    #     D[Nx, Nx-1] = -2.0/dx    # placeholder
+    #     return D.tocsr()
+
+    # def build_Dy_1d(Ny, dy):
+    #     D = lil_matrix((Ny+1, Ny), dtype=float)
+    #     for j in range(1, Ny):
+    #         D[j, j] = -1.0/dy
+    #         D[j, j-1] = 1.0/dy
+    #     D[0, 0] = -2.0/dy
+    #     D[Ny, Ny-1] = 2.0/dy
+    #     return D.tocsr()
+
+    # Dy_1d = build_Dx_1d(Nx, dx)
+    # plt.spy(Dy_1d)
+    # plt.show()
+    # D_y = kron(eye(Nx+1, format='csr'), Dy_1d, format='csr')
+    # Dx_1d = build_Dy_1d(Ny, dy)
+    # plt.spy(Dx_1d)
+    # D_x = kron(Dx_1d, eye(Ny+1, format='csr'), format='csr')
+    # G_x = -D_x.transpose().tocsr()
+    # G_y = -D_y.transpose().tocsr()
+
+    Dy_b = diags([np.ones(Ny + 1), -np.ones(Ny + 1)], offsets=[0, -1], shape=(Ny + 1, Ny))
+    D_y_backward = Dy_b / dx
+    D_y = kron(eye(Nx + 1, format='csr'), D_y_backward, format='csr')
+
+    Dx_f = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
+    D_x_forward = Dx_f / dy
+    D_x = kron(D_x_forward, eye(Ny + 1, format='csr'), format='csr')
+
+    G_x = -D_x.copy().T
+    G_y = -D_y.copy().T
 
     # check Divergence operators
     computed_Dx_U = D_x @ UExact.ravel(order='F')
     computed_Dy_V = D_y @ VExact.ravel(order='F')
 
+    # check divergence free
+    free = computed_Dx_U + computed_Dy_V
+    print("mean divergence =", np.mean(free))
+
     exact_Dx_U = np.zeros([Ny + 1, Nx + 1])
     exact_Dy_V = np.zeros([Ny + 1, Nx + 1])
-    # compare with actual laplacian
+    # compare with actual divergence
     for j in range(Ny + 1):
         for i in range(Nx + 1):
             exact_Dx_U[j, i] = compute_Dx_U(x_offset[i], y_offset[j])
@@ -511,11 +550,31 @@ for k in size_range:
     err2Norm_Dx_arr[k] = err2Norm_Dx_U
     err2Norm_Dy_arr[k] = err2Norm_Dy_V
 
-    RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
+    # check Gradient operators
+    computed_Gx_P = G_x @ PExact.ravel(order='F')
+    computed_Gy_P = G_y @ PExact.ravel(order='F')
+
+    exact_Gx_P = np.zeros([Ny + 1, Nx])
+    exact_Gy_P = np.zeros([Ny, Nx + 1])
+    # compare with actual laplacian
+    for j in range(Ny + 1):
+        for i in range(Nx):
+            exact_Gx_P[j, i] = compute_Gx_P(x_trunc[i], y_offset[j])
+    for j in range(Ny):
+        for i in range(Nx + 1):
+            exact_Gy_P[j, i] = compute_Gy_P(x_offset[i], y_trunc[j])
+
+    err2Norm_Gx_P = np.linalg.norm(exact_Gx_P.ravel(order='F') - computed_Gx_P, ord=2) / np.linalg.norm(exact_Gx_P.ravel(order='F'), ord=2)
+    err2Norm_Gy_P = np.linalg.norm(exact_Gy_P.ravel(order='F') - computed_Gy_P, ord=2) / np.linalg.norm(exact_Gy_P.ravel(order='F'), ord=2)
+
+    err2Norm_Gx_arr[k] = err2Norm_Gx_P
+    err2Norm_Gy_arr[k] = err2Norm_Gy_P
+
+    RHS = np.concatenate([f_bc, g_bc, h_bc])
     RHS_schur = schur_rhs(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib)
 
     # Solve
-    shape = N_P + 2 * Nib
+    shape = N_P
     SchurOp = SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib)
     sol, info = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, x0=exact_sol, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
@@ -524,7 +583,7 @@ for k in size_range:
     lam_X = sol[N_P:N_P + Nib]
     lam_Y = sol[N_P + Nib:]
 
-    #P = P - np.mean(P)
+    P = P - np.mean(P)
 
     # Postprocessing: compute U and V
     U = compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc)
@@ -534,13 +593,9 @@ for k in size_range:
     UNumericalList[0:(Nx + 1) * Ny, k] = U
     VNumericalList[0:Nx * (Ny + 1), k] = V
     PNumericalList[0:(Nx + 1) * (Nx + 1), k] = P
-    Lam_X_NumericalList[0:Nib, k] = lam_X
-    Lam_Y_NumericalList[0:Nib, k] = lam_Y
     UExactList[0:(Nx + 1) * Ny, k] = UExact.ravel(order='F')
     VExactList[0:Nx * (Ny + 1), k] = VExact.ravel(order='F')
     PExactList[0:(Nx + 1) * (Nx + 1), k] = PExact.ravel(order='F')
-    Lam_X_ExactList[0:Nib, k] = lam_x_exact
-    Lam_Y_ExactList[0:Nib, k] = lam_y_exact
 
     # Reshape back using Fortran order to match MATLAB layout
     Uplot = U.reshape((Ny + 1, Nx), order='F')
@@ -585,6 +640,8 @@ plt.loglog(N, err2Norm_Lap_U_arr, '--o', label=r'$L_U$')
 plt.loglog(N, err2Norm_Lap_V_arr, '--o', label=r'$L_V$')
 plt.loglog(N, err2Norm_Dx_arr, '--o', label=r'$D_x$')
 plt.loglog(N, err2Norm_Dy_arr, '--o', label=r'$D_y$')
+plt.loglog(N, err2Norm_Gx_arr, '--o', label=r'$G_x$')
+plt.loglog(N, err2Norm_Gy_arr, '--o', label=r'$G_y$')
 plt.loglog(N, h**2, '--', label='2nd order')
 plt.xlabel(r'$N$', fontsize=22)
 plt.ylabel(r'$Err$', fontsize=22)
@@ -629,6 +686,18 @@ fig = plt.figure()
 ax = fig.add_subplot(111, projection="3d")
 ax.plot_surface(Xplot, Yplot, VFull, cmap=cmap, edgecolor='none')
 ax.set_title("V")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(UGridX, UGridY, UExact, cmap=cmap, edgecolor='none')
+ax.set_title("U_exact")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(VGridX, VGridY, VExact, cmap=cmap, edgecolor='none')
+ax.set_title("V_exact")
 ax.set_xlabel("x"); ax.set_ylabel("y")
 
 fig = plt.figure()
