@@ -315,17 +315,21 @@ def build_staggered_Laps(Nx, dx):
     return Lap_U, Lap_V
 
 def build_staggered_Grads_Divs(Nx, dx):
-    Dy_b = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
-    D_y_backward = Dy_b / dx
-    D_y = kron(eye(Nx + 1, format='csr'), D_y_backward, format='csr')
+    # 1D backward difference (faces → centers) for x-velocity
+    D1x = diags([-1.0, 1.0], [0, 1], shape=(Nx, Nx+1)) / dx
+    # 1D backward difference (faces → centers) for y-velocity
+    D1y = diags([-1.0, 1.0], [0, 1], shape=(Nx, Nx+1)) / dx
 
-    # --- X-direction forward difference ---
-    Dx_f = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
-    D_x_forward = Dx_f / dx
-    D_x = kron(D_x_forward, eye(Nx + 1, format='csr'), format='csr')
+    # Kronecker expansions
+    # Divergence of u → pressure
+    D_x = kron(eye(Nx, format='csr'), D1x, format='csr')      # (Nx*Nx) × ((Nx+1)*Nx)
 
-    G_x = -D_x.copy().T
-    G_y = -D_y.copy().T
+    # Divergence of v → pressure
+    D_y = kron(D1y, eye(Nx, format='csr'), format='csr')      # (Nx*Nx) × (Nx*(Nx+1))
+
+    # Gradients (exact adjoints)
+    G_x = -D_x.transpose().tocsr()   # ((Nx+1)*Nx) × (Nx*Nx)
+    G_y = -D_y.transpose().tocsr()   # (Nx*(Nx+1)) × (Nx*Nx)
 
     return G_x, G_y, D_x, D_y
 

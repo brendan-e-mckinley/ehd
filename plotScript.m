@@ -8,9 +8,9 @@ clear;clc;
 
 ld = load('Full_System_Results.mat');
 
-Phi = ld.Phi';
-Np = ld.Np';
-Nm = ld.Nm';
+Phi = ld.Phi;
+Np = ld.Np;
+Nm = ld.Nm;
 Xint = ld.Xint;
 Yint = ld.Yint;
 

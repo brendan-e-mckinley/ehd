@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from sksparse.cholmod import cholesky
 from scipy.sparse import diags, kron, eye, csr_matrix, bmat, lil_matrix
 from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.interpolate import BSpline
@@ -227,40 +228,62 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, 
     
     return res
 
-def SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib, cut):
-    n = shape
-    def mv(unknowns):
-        unknown_P = unknowns[:N_P]
-        unknown_Lam_x = unknowns[N_P:N_P + Nib]
-        unknown_Lam_y = unknowns[N_P + Nib:N_P + 2*Nib]
-        return apply_Schur([unknown_P, unknown_Lam_x, unknown_Lam_y], UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut)
-    return LinearOperator((n, n), matvec=mv)
+def SchurLinearOperator_new(shape, UGridX, UGridY, VGridX, VGridY,
+                            xib, yib,
+                            delta_x, delta_y,
+                            Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                            Nib, cut):
 
-def apply_Ainv(Lap_U, Lap_V, target_vec):
-    target_vec_1, target_vec_2 = target_vec
+    def mv(vec):
+        Lam_x = vec[:Nib]
+        Lam_y = vec[Nib:2*Nib]
+        return apply_Schur_new(Lam_x, Lam_y,
+                               UGridX, UGridY, VGridX, VGridY,
+                               xib, yib, delta_x, delta_y,
+                               Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                               cut)
 
-    # second and third blocks are straightforward
-    result_vec_1 = spsolve(Lap_U, target_vec_1)
-    result_vec_2 = spsolve(Lap_V, target_vec_2)
+    return LinearOperator((shape, shape), matvec=mv)
 
-    return [result_vec_1, result_vec_2]
+def apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                      N_U, N_V, N_P):
+    
+    # Build full sparse L operator
+    # Zero blocks for bmat (explicit shapes)
+    Z_UV = csr_matrix((N_U, N_V))
+    Z_VU = csr_matrix((N_V, N_U))
+    Z_PP = csr_matrix((N_P, N_P))
 
-def apply_Schur(unknown_blocks, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut):
-    Pi, Lam_x, Lam_y = unknown_blocks
+    # Saddle point system
+    L = bmat([
+        [Lap_U, Z_VU,  G_x],
+        [Z_UV,  Lap_V, G_y],
+        [D_x,   D_y,   Z_PP]  # Z_PU.T is zero but sized correctly
+    ], format='csr')
 
-    # apply B 
-    B_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut) - G_x @ Pi
-    B_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut) - G_y @ Pi
+    dL = cholesky(-L)
 
-    # apply A inverse 
-    Ainv_B_U, Ainv_B_V = apply_Ainv(Lap_U, Lap_V, [B_U, B_V])
+def apply_Schur_new(Lam_x, Lam_y,
+                    UGridX, UGridY, VGridX, VGridY,
+                    xib, yib,
+                    delta_x, delta_y,
+                    Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                    cut):
 
-    # apply C 
-    res_1 = D_x @ Ainv_B_U + D_y @ Ainv_B_V
-    res_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_B_U, delta_x, cut)
-    res_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_B_V, delta_y, cut)
+    # B * [Lam_x, Lam_y]
+    rhs_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
+    rhs_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut)
+    rhs_div = np.zeros_like(rhs_U)  # No divergence forcing here
 
-    return np.concatenate([res_1, res_2, res_3])
+    # Solve A^{-1}
+    U, V, _ = apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                                rhs_U, rhs_V, rhs_div)
+
+    # C * (result)
+    res_x = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
+    res_y = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y, cut)
+
+    return np.concatenate([res_x, res_y])
 
 def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC, cut):
     RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
@@ -272,27 +295,38 @@ def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, de
     V = spsolve(Lap_V, RHS)
     return V
 
-def schur_rhs(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib, cut):
-    rhs_1 = rhs[0:N_U]
-    offset = N_U
-    rhs_2 = rhs[offset:offset + N_V]
-    offset = offset + N_V
-    rhs_3 = rhs[offset:offset + N_P]
-    offset = offset + N_P
-    rhs_4 = rhs[offset:offset + Nib]
-    offset = offset + Nib
-    rhs_5 = rhs[offset:offset + Nib]
+def schur_rhs_new(rhs, 
+                  Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                  UGridX, UGridY, VGridX, VGridY,
+                  delta_x, delta_y, xib, yib,
+                  N_U, N_V, N_P, Nib, cut):
 
-    Ainv_U, Ainv_V = apply_Ainv(Lap_U, Lap_V, [rhs_1, rhs_2])
-    CAinv_1 = D_x @ Ainv_U + D_y @ Ainv_V
-    CAinv_2 = interpPhi_x(UGridX, UGridY, xib, yib, Ainv_U, delta_x, cut)
-    CAinv_3 = interpPhi_y(VGridX, VGridY, xib, yib, Ainv_V, delta_y, cut)
+    # unpack
+    rhs_U = rhs[:N_U]
+    rhs_V = rhs[N_U:N_U+N_V]
 
-    schur_rhs_1 = CAinv_1 - rhs_3
-    schur_rhs_2 = CAinv_2 - rhs_4
-    schur_rhs_3 = CAinv_3 - rhs_5
+    # the original rhs includes a pressure row and two IB rows, but
+    # pressure is now solved inside A^{-1}, so we skip rhs_P
+    offset = N_U + N_V
+    rhs_div = rhs[offset:offset + N_P]
+    offset += N_P
+    rhs_Jx = rhs[offset:offset + Nib]
+    rhs_Jy = rhs[offset + Nib:offset + 2*Nib]
 
-    return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
+    # STEP 1: Apply A^{-1} to (rhs_U, rhs_V, rhs_div)
+    U, V, _ = apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                                N_U, N_V, N_P)
+
+    # STEP 2: Apply C to the result
+    CAinv_x = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
+    CAinv_y = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y, cut)
+
+    # STEP 3: Schur RHS = -C*A^{-1}(rhs)  +  original IB rhs components
+    # (these rhs_Jx, rhs_Jy represent forcing on the constraints)
+    schur_rhs_x = rhs_Jx - CAinv_x
+    schur_rhs_y = rhs_Jy - CAinv_y
+
+    return np.concatenate((schur_rhs_x, schur_rhs_y))
 
 def build_staggered_Laps(Nx, dx):
     dx2 = dx**2
@@ -352,11 +386,7 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut
     Nib = len(theta)
     xib = rad * np.cos(theta) 
     yib = rad * np.sin(theta)
-    # xib = 0.5 + rad * np.cos(theta) 
-    # yib = 0.5 + rad * np.sin(theta)
-
-    # IB
-    # Nib = len(theta)
+    # FOR TESTING ONLY
     # xib = 0.5 + rad * np.cos(theta) 
     # yib = 0.5 + rad * np.sin(theta)
 
@@ -380,12 +410,12 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut
     G_x, G_y, D_x, D_y = build_staggered_Grads_Divs(Nx, dx)
 
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    RHS_schur = schur_rhs(RHS, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, VGridX, VGridY, xib, yib, N_U, N_V, N_P, Nib, cut)
+    RHS_schur = schur_rhs_new(RHS, Lap_U, Lap_V, G_x, G_y, D_x, D_y, UGridX, UGridY, VGridX, VGridY, delta_x, delta_y, xib, yib, N_U, N_V, N_P, Nib, cut)
 
     # Solve
-    shape = N_P + 2 * Nib
-    SchurOp = SchurLinearOperator(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_P, Nib, cut)
-    sol, info = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
+    shape = 2 * Nib
+    SchurOp = SchurLinearOperator_new(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, Nib, cut)
+    sol, _ = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
     # # Solve using dense Schur matrix
     # shape = N_P + 2 * Nib
