@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sksparse.cholmod import cholesky
 from scipy.sparse import diags, kron, eye, csr_matrix, bmat, lil_matrix
-from scipy.sparse.linalg import spsolve, gmres, LinearOperator
+from scipy.sparse.linalg import spsolve, gmres, splu, LinearOperator, minres
 from scipy.interpolate import BSpline
 from numba import jit
 
@@ -231,8 +231,8 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, 
 def SchurLinearOperator_new(shape, UGridX, UGridY, VGridX, VGridY,
                             xib, yib,
                             delta_x, delta_y,
-                            Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                            Nib, cut):
+                            Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y,
+                            N_U, N_V, N_P, Nib, tol, cut):
 
     def mv(vec):
         Lam_x = vec[:Nib]
@@ -240,13 +240,13 @@ def SchurLinearOperator_new(shape, UGridX, UGridY, VGridX, VGridY,
         return apply_Schur_new(Lam_x, Lam_y,
                                UGridX, UGridY, VGridX, VGridY,
                                xib, yib, delta_x, delta_y,
-                               Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                               cut)
+                               Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y,
+                               N_U, N_V, N_P, tol, cut)
 
     return LinearOperator((shape, shape), matvec=mv)
 
-def apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                      N_U, N_V, N_P):
+def apply_Ainv_Stokes(rhs, Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y,
+                      N_U, N_V, N_P, tol):
     
     # Build full sparse L operator
     # Zero blocks for bmat (explicit shapes)
@@ -256,28 +256,52 @@ def apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
 
     # Saddle point system
     L = bmat([
-        [Lap_U, Z_VU,  G_x],
-        [Z_UV,  Lap_V, G_y],
-        [D_x,   D_y,   Z_PP]  # Z_PU.T is zero but sized correctly
+        [Lap_U, Z_VU,  -G_x],
+        [Z_UV,  Lap_V, -G_y],
+        [D_x,   D_y,   Z_PP] 
     ], format='csr')
 
-    dL = cholesky(-L)
+    # Preconditioner apply: y -> M^{-1} y (block diagonal)
+    def apply_minv(y):
+        # y is a vector of length N_U+N_V+N_P
+        yu = y[:N_U]
+        yv = y[N_U:N_U + N_V]
+        yp = y[N_U + N_V:]
+
+        xu = LU_U.solve(yu)         # solve Lap_U * xu = yu
+        xv = LU_V.solve(yv)         # solve Lap_V * xv = yv
+        xp = yp.copy()              # keep pressure block
+
+        return np.concatenate([xu, xv, xp])
+
+    M_inv = LinearOperator((N_U + N_V + N_P, N_U + N_V + N_P), matvec=apply_minv, dtype=float)
+
+    # Solve using MINRES
+    x, info = minres(L, rhs, M=M_inv, rtol=tol)
+    if info != 0:
+        # info > 0 : maxiter reached; info < 0 : illegal input or breakdown
+        print(f"MINRES returned info = {info} (non-zero). You may need a better preconditioner.")
+    # split result
+    x_u = x[:N_U]
+    x_v = x[N_U:N_U + N_V]
+    x_p = x[N_U + N_V:]
+
+    return x_u, x_v, x_p
 
 def apply_Schur_new(Lam_x, Lam_y,
                     UGridX, UGridY, VGridX, VGridY,
                     xib, yib,
                     delta_x, delta_y,
-                    Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                    cut):
+                    Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y,
+                    N_U, N_V, N_P, tol, cut):
 
     # B * [Lam_x, Lam_y]
     rhs_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
     rhs_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut)
-    rhs_div = np.zeros_like(rhs_U)  # No divergence forcing here
+    rhs_div = np.zeros(N_P)  # No divergence forcing here
 
     # Solve A^{-1}
-    U, V, _ = apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                                rhs_U, rhs_V, rhs_div)
+    U, V, _ = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_div]), Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y, N_U, N_V, N_P, tol)
 
     # C * (result)
     res_x = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
@@ -296,10 +320,10 @@ def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, de
     return V
 
 def schur_rhs_new(rhs, 
-                  Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+                  Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y,
                   UGridX, UGridY, VGridX, VGridY,
                   delta_x, delta_y, xib, yib,
-                  N_U, N_V, N_P, Nib, cut):
+                  N_U, N_V, N_P, Nib, tol, cut):
 
     # unpack
     rhs_U = rhs[:N_U]
@@ -314,8 +338,8 @@ def schur_rhs_new(rhs,
     rhs_Jy = rhs[offset + Nib:offset + 2*Nib]
 
     # STEP 1: Apply A^{-1} to (rhs_U, rhs_V, rhs_div)
-    U, V, _ = apply_Ainv_Stokes(Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                                N_U, N_V, N_P)
+    U, V, _ = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_div]), Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y,
+                                N_U, N_V, N_P, tol)
 
     # STEP 2: Apply C to the result
     CAinv_x = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
@@ -329,37 +353,76 @@ def schur_rhs_new(rhs,
     return np.concatenate((schur_rhs_x, schur_rhs_y))
 
 def build_staggered_Laps(Nx, dx):
+    """
+    Construct Lap_U and Lap_V using D^T D on the staggered MAC grids,
+    maintaining the same sizes and indexing order as your original code.
+    """
+
     dx2 = dx**2
 
-    # 1-D operators (Dirichlet in x, Dirichlet in y via zero ghosts)
-    # assumes Nx = Ny
+    # --- 1D second-derivative stencils (Dirichlet) ---
+    # matches your original D2_p and D2 exactly (including -3 diagonal closure)
     e_p = np.ones(Nx + 1)
-    e = np.ones(Nx)
-    D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
+    e   = np.ones(Nx)
+
+    D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1],
+                 shape=(Nx + 1, Nx + 1), format='lil')
     D2_p[0, 0] = -3.0
     D2_p[-1, -1] = -3.0
     D2_p = (D2_p / dx2).tocsr()
 
-    D2 = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
-    D2 = (D2 / dx2).tocsr()
+    D2 = diags([e, -2*e, e], offsets=[-1, 0, 1],
+               shape=(Nx, Nx), format='csr') / dx2
 
-    Lap_U = kron(D2, eye(Nx + 1, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_p, format='csr')
-    Lap_V = kron(D2_p, eye(Nx, format='csr'), format='csr') + kron(eye(Nx + 1, format='csr'), D2, format='csr')
+    # --- 1D first-difference stencils (Dirichlet) ---
+    # forward/back difference pair consistent with the BC closure
+    D1_p = diags([e_p, -e_p], offsets=[0, -1], shape=(Nx + 1, Nx + 1), format='csr') / dx
+    D1   = diags([e,   -e  ], offsets=[0, -1], shape=(Nx, Nx), format='csr') / dx
 
-    return Lap_U, Lap_V
+    # --- U-grid derivative operators ---
+    # U is (Nx+1) x Nx → size N_U = (Nx+1)*Nx
+    Dux = kron(D1_p, eye(Nx, format='csr'), format='csr')    # derivative in x-direction on U grid
+    Duy = kron(eye(Nx + 1, format='csr'), D1, format='csr')  # derivative in y-direction on U grid
+
+    Lap_U = (Dux.T @ Dux) + (Duy.T @ Duy)
+
+    # --- V-grid derivative operators ---
+    # V is Nx x (Nx+1) → size N_V = Nx*(Nx+1)
+    Dvx = kron(D1, eye(Nx + 1, format='csr'), format='csr')  # derivative in x-direction on V grid
+    Dvy = kron(eye(Nx, format='csr'), D1_p, format='csr')    # derivative in y-direction on V grid
+
+    Lap_V = (Dvx.T @ Dvx) + (Dvy.T @ Dvy)
+
+    return Lap_U.tocsr(), Lap_V.tocsr()
 
 def build_staggered_Grads_Divs(Nx, dx):
-    Dy_b = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
-    D_y_backward = Dy_b / dx
-    D_y = kron(eye(Nx + 1, format='csr'), D_y_backward, format='csr')
+    """
+    Build staggered-grid divergence and its (negative) transpose gradient
+    using the same shapes/ordering as your original implementation.
 
-    # --- X-direction forward difference ---
-    Dx_f = diags([np.ones(Nx + 1), -np.ones(Nx + 1)], offsets=[0, -1], shape=(Nx + 1, Nx))
-    D_x_forward = Dx_f / dx
-    D_x = kron(D_x_forward, eye(Nx + 1, format='csr'), format='csr')
+    Grid layout assumptions (matching your original code):
+      - U lives on vertical faces:       N_U = Nx * (Nx + 1)
+      - V lives on horizontal faces:     N_V = (Nx + 1) * Nx  (same number as N_U)
+      - P lives on a (Nx+1) x (Nx+1) mesh: N_P = (Nx + 1)**2
 
-    G_x = -D_x.copy().T
-    G_y = -D_y.copy().T
+    These sizes match the kron expansions in your original snippet.
+    Dirichlet boundaries are implicitly handled by the 1D stencil shapes.
+    """
+    # 1D forward-like stencil used in original (shape (Nx+1, Nx))
+    # (this matches your original Dx_f / Dy_b creation)
+    stencil_rows = np.ones(Nx + 1)
+    # shape (Nx+1, Nx): element i uses difference between col i and col i-1 (offsets 0 and -1)
+    D1 = diags([stencil_rows, -stencil_rows], offsets=[0, -1], shape=(Nx + 1, Nx), format='csr') / dx
+
+    # Note: original code used D_y = kron(I_{Nx+1}, D_y_backward)
+    # and D_x = kron(D_x_forward, I_{Nx+1}).
+    # Keep exactly those kron orders so shapes match your existing code.
+    D_y = kron(eye(Nx + 1, format='csr'), D1, format='csr')   # maps V -> P
+    D_x = kron(D1, eye(Nx + 1, format='csr'), format='csr')   # maps U -> P
+
+    # Gradients are exact adjoints (negative transposes)
+    G_x = (-D_x.transpose()).tocsr()
+    G_y = (-D_y.transpose()).tocsr()
 
     return G_x, G_y, D_x, D_y
 
@@ -409,12 +472,16 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut
     Lap_U, Lap_V = build_staggered_Laps(Nx, dx)
     G_x, G_y, D_x, D_y = build_staggered_Grads_Divs(Nx, dx)
 
+    # Prefactor Lap_U and Lap_V with sparse LU (for preconditioner solves)
+    LU_U = splu(Lap_U)   # may raise if Lap_U is singular — check BCs
+    LU_V = splu(Lap_V)
+
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    RHS_schur = schur_rhs_new(RHS, Lap_U, Lap_V, G_x, G_y, D_x, D_y, UGridX, UGridY, VGridX, VGridY, delta_x, delta_y, xib, yib, N_U, N_V, N_P, Nib, cut)
+    RHS_schur = schur_rhs_new(RHS, Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y, UGridX, UGridY, VGridX, VGridY, delta_x, delta_y, xib, yib, N_U, N_V, N_P, Nib, tol, cut)
 
     # Solve
     shape = 2 * Nib
-    SchurOp = SchurLinearOperator_new(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, Nib, cut)
+    SchurOp = SchurLinearOperator_new(shape, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, LU_U, LU_V, G_x, G_y, D_x, D_y, N_U, N_V, N_P, Nib, tol, cut)
     sol, _ = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
     # # Solve using dense Schur matrix
