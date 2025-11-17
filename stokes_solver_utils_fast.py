@@ -229,21 +229,16 @@ def apply_A(x, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, 
     
     return res
 
-def SchurLinearOperator_new(shape, P_op, UGridX, UGridY, VGridX, VGridY,
+def SchurLinearOperator_new(shape, lu_factorization, UGridX, UGridY, VGridX, VGridY,
                             xib, yib,
                             delta_x, delta_y,
-                            Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                            N_U, N_V, N_P, Nib, tol, cut):
+                            N_U, N_V, N_P, Nib, cut):
 
     def mv(vec):
         Lam_x = vec[:Nib]
         Lam_y = vec[Nib:2*Nib]
-        return apply_Schur_new(Lam_x, Lam_y, P_op,
-                               UGridX, UGridY, VGridX, VGridY,
-                               xib, yib, delta_x, delta_y,
-                               Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                               N_U, N_V, N_P, tol, cut)
-
+        return apply_Schur_new(Lam_x, Lam_y, lu_factorization, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, cut)
+        
     return LinearOperator((shape, shape), matvec=mv)
 
 def SchurLinearOperator_mini(chol_U, chol_V, G_x, G_y, D_x, D_y, N_P):
@@ -280,46 +275,49 @@ def schur_rhs_mini(rhs,
 
     return rhs_S
 
-def apply_Ainv_Stokes(rhs, P_op, Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                      N_U, N_V, N_P, tol):
+def apply_Ainv_Stokes(rhs, lu_factorization, N_U, N_V):
+
+    x = lu_factorization.solve(rhs)
+
+    u = x[:N_U]
+    v = x[N_U:N_U+N_V]
+    p = x[N_U+N_V:]
     
-    # Factor the velocity Laplacians once
-    chol_U = cholesky(Lap_U)
-    chol_V = cholesky(Lap_V)
-
-    RHS_schur_mini = schur_rhs_mini(rhs, chol_U, chol_V, D_x, D_y, N_U, N_V, N_P)
-
-    MiniSchurOp = SchurLinearOperator_mini(chol_U, chol_V, G_x, G_y, D_x, D_y, N_P)
-    p, _ = gmres(MiniSchurOp, RHS_schur_mini, M=P_op, rtol=tol, restart=500, callback=lambda rk: print(f"Mini Schur solve residual: {np.linalg.norm(rk)}"))
-
-    # postprocessing: compute U and V
-    gx_p = G_x @ p
-    gy_p = G_y @ p
-    u = chol_U.solve_A(gx_p)
-    v = chol_V.solve_A(gy_p)
-
     return u, v, p
 
-def apply_Schur_new(Lam_x, Lam_y, P_op,
+def apply_Schur_new(Lam_x, Lam_y, lu_factorization,
                     UGridX, UGridY, VGridX, VGridY,
                     xib, yib,
                     delta_x, delta_y,
-                    Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                    N_U, N_V, N_P, tol, cut):
+                    N_U, N_V, N_P, cut):
 
     # B * [Lam_x, Lam_y]
     rhs_U = spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
     rhs_V = spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut)
-    rhs_div = np.zeros(N_P)  # No divergence forcing here
+    rhs_div = np.zeros(N_P) 
 
     # Solve A^{-1}
-    U, V, _ = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_div]), P_op, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_U, N_V, N_P, tol)
+    U, V, _ = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_div]), lu_factorization, N_U, N_V)
 
     # C * (result)
     res_x = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
     res_y = interpPhi_y(VGridX, VGridY, xib, yib, V, delta_y, cut)
 
     return np.concatenate([res_x, res_y])
+
+def compute_U_V_P_postprocessing(Lam_x, Lam_y, lu_factorization,
+                                    UGridX, UGridY, VGridX, VGridY,
+                                    xib, yib,
+                                    delta_x, delta_y,
+                                    f_BC, g_BC, h_BC,
+                                    N_U, N_V, cut):
+    rhs_U = f_BC - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
+    rhs_V = g_BC - spreadQ_y(VGridX, VGridY, xib, yib, Lam_y, delta_y, cut)
+    rhs_P = h_BC
+
+    U, V, P = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_P]), lu_factorization, N_U, N_V)
+
+    return U, V, P    
 
 def compute_U_postprocessing(Pi, Lam_x, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_BC, cut):
     RHS = f_BC + G_x @ Pi - spreadQ_x(UGridX, UGridY, xib, yib, Lam_x, delta_x, cut)
@@ -331,11 +329,10 @@ def compute_V_postprocessing(Pi, Lam_y, VGridX, VGridY, xib, yib, Lap_V, G_y, de
     V = spsolve(Lap_V, RHS)
     return V
 
-def schur_rhs_new(rhs, P_op,
-                  Lap_U, Lap_V, G_x, G_y, D_x, D_y,
+def schur_rhs_new(rhs, lu_factorization,
                   UGridX, UGridY, VGridX, VGridY,
                   delta_x, delta_y, xib, yib,
-                  N_U, N_V, N_P, Nib, tol, cut):
+                  N_U, N_V, N_P, Nib, cut):
 
     # unpack
     rhs_U = rhs[:N_U]
@@ -347,11 +344,10 @@ def schur_rhs_new(rhs, P_op,
     rhs_div = rhs[offset:offset + N_P]
     offset += N_P
     rhs_Jx = rhs[offset:offset + Nib]
-    rhs_Jy = rhs[offset + Nib:offset + 2*Nib]
+    rhs_Jy = rhs[offset + Nib:]
 
     # STEP 1: Apply A^{-1} to (rhs_U, rhs_V, rhs_div)
-    U, V, _ = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_div]), P_op, Lap_U, Lap_V, G_x, G_y, D_x, D_y,
-                                N_U, N_V, N_P, tol)
+    U, V, _ = apply_Ainv_Stokes(np.concatenate([rhs_U, rhs_V, rhs_div]), lu_factorization, N_U, N_V)
 
     # STEP 2: Apply C to the result
     CAinv_x = interpPhi_x(UGridX, UGridY, xib, yib, U, delta_x, cut)
@@ -359,8 +355,8 @@ def schur_rhs_new(rhs, P_op,
 
     # STEP 3: Schur RHS = -C*A^{-1}(rhs)  +  original IB rhs components
     # (these rhs_Jx, rhs_Jy represent forcing on the constraints)
-    schur_rhs_x = rhs_Jx - CAinv_x
-    schur_rhs_y = rhs_Jy - CAinv_y
+    schur_rhs_x = CAinv_x - rhs_Jx
+    schur_rhs_y = CAinv_y - rhs_Jy
 
     return np.concatenate((schur_rhs_x, schur_rhs_y))
 
@@ -449,7 +445,7 @@ def solve_from_svd(U, Sigma, Vh, rhs):
     return res
 
 # solve the system, assumes Dirichlet boundaries = 0 for x and y dimensions
-def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut):
+def solve(left_bound, right_bound, lu_factorization, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut):
     x = np.linspace(left_bound, right_bound, Nx + 2)
     dx = x[1] - x[0]
     y = x.copy()
@@ -481,9 +477,6 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut
     N_V = Nx * (Nx + 1)
     N_P = (Nx + 1) * (Nx + 1)
 
-    Lap_U, Lap_V = build_staggered_Laps(Nx, dx)
-    G_x, G_y, D_x, D_y = build_staggered_Grads_Divs(Nx, dx)
-
     # # # preconditioner for stokes system
     # Lap_P = D_x @ G_x + D_y @ G_y
     # diag = Lap_P.diagonal()
@@ -491,45 +484,41 @@ def solve(left_bound, right_bound, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut
     # def apply_Minv(r): return r / diag_safe
     # P_op = LinearOperator((N_P, N_P), matvec=apply_Minv, dtype=np.float64)
 
-    M_U = diags(1.0 / Lap_U.diagonal())
-    M_V = diags(1.0 / Lap_V.diagonal())
+    # M_U = diags(1.0 / Lap_U.diagonal())
+    # M_V = diags(1.0 / Lap_V.diagonal())
 
-    preconditioner = D_x @ M_U @ G_x + D_y @ M_V @ G_y
+    # preconditioner = D_x @ M_U @ G_x + D_y @ M_V @ G_y
 
     RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-    RHS_schur = schur_rhs_new(RHS, preconditioner, Lap_U, Lap_V, G_x, G_y, D_x, D_y, UGridX, UGridY, VGridX, VGridY, delta_x, delta_y, xib, yib, N_U, N_V, N_P, Nib, tol, cut)
+    RHS_schur = schur_rhs_new(RHS, lu_factorization, UGridX, UGridY, VGridX, VGridY, delta_x, delta_y, xib, yib, N_U, N_V, N_P, Nib, cut)
 
     # Solve
-    # shape = 2 * Nib
-    # SchurOp = SchurLinearOperator_new(shape, P_op, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_U, N_V, N_P, Nib, tol, cut)
-    # sol, _ = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
-
-    # Solve using dense Schur matrix
     shape = 2 * Nib
-    schurDense = np.zeros((shape, shape))
-    for col in range(shape): 
-        eye_mat = np.zeros(shape)
-        eye_mat[col] = 1
-        eye_Lam_x = eye_mat[:Nib]
-        eye_Lam_y = eye_mat[Nib:]
-        res = apply_Schur_new(eye_Lam_x, eye_Lam_y, P_op, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, Lap_U, Lap_V, G_x, G_y, D_x, D_y, N_U, N_V, N_P, tol, cut)
-        schurDense[:,col] = res
+    SchurOp = SchurLinearOperator_new(shape, lu_factorization, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, cut)
+    sol, _ = gmres(SchurOp, RHS_schur, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
-    # Compute SVD once
-    U, Sigma, Vh = np.linalg.svd(schurDense)
+    # # Solve using dense Schur matrix
+    # shape = 2 * Nib
+    # schurDense = np.zeros((shape, shape))
+    # for col in range(shape): 
+    #     eye_mat = np.zeros(shape)
+    #     eye_mat[col] = 1
+    #     eye_Lam_x = eye_mat[:Nib]
+    #     eye_Lam_y = eye_mat[Nib:]
+    #     res = apply_Schur_new(eye_Lam_x, eye_Lam_y, lu_factorization, UGridX, UGridY, VGridX, VGridY, xiv, yiv, delta_x, delta_y, N_U, N_V, N_P, cut)
+    #     schurDense[:,col] = res
 
-    sol = solve_from_svd(U, Sigma, Vh, RHS_schur)
+    # # Compute SVD once
+    # U, Sigma, Vh = np.linalg.svd(schurDense)
+
+    # sol = solve_from_svd(U, Sigma, Vh, RHS_schur)
 
     # Split (no change in ordering of partition)
-    P = sol[:N_P]
-    lam_X = sol[N_P:N_P + Nib]
-    lam_Y = sol[N_P + Nib:]
-
-    #P = P - np.mean(P)
+    lam_X = sol[:Nib]
+    lam_Y = sol[Nib:]
 
     # Postprocessing: compute U and V
-    U = compute_U_postprocessing(P, lam_X, UGridX, UGridY, xib, yib, Lap_U, G_x, delta_x, f_bc, cut)
-    V = compute_V_postprocessing(P, lam_Y, VGridX, VGridY, xib, yib, Lap_V, G_y, delta_y, g_bc, cut)
+    U, V, P = compute_U_V_P_postprocessing(lam_X, lam_Y, lu_factorization, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, f_bc, g_bc, h_bc, N_U, N_V, cut)
 
     # # COMPUTE USING FULL OPERATOR CHECK
     # Nu = apply_A(np.concatenate([U, V, P, lam_X, lam_Y]), UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut)
