@@ -315,21 +315,33 @@ def build_staggered_Laps(Nx, dx):
     return Lap_U, Lap_V
 
 def build_staggered_Grads_Divs(Nx, dx):
-    # 1D backward difference (faces → centers) for x-velocity
-    D1x = diags([-1.0, 1.0], [0, 1], shape=(Nx, Nx+1)) / dx
-    # 1D backward difference (faces → centers) for y-velocity
-    D1y = diags([-1.0, 1.0], [0, 1], shape=(Nx, Nx+1)) / dx
+    """
+    Build staggered-grid divergence and its (negative) transpose gradient
+    using the same shapes/ordering as your original implementation.
 
-    # Kronecker expansions
-    # Divergence of u → pressure
-    D_x = kron(eye(Nx, format='csr'), D1x, format='csr')      # (Nx*Nx) × ((Nx+1)*Nx)
+    Grid layout assumptions (matching your original code):
+      - U lives on vertical faces:       N_U = Nx * (Nx + 1)
+      - V lives on horizontal faces:     N_V = (Nx + 1) * Nx  (same number as N_U)
+      - P lives on a (Nx+1) x (Nx+1) mesh: N_P = (Nx + 1)**2
 
-    # Divergence of v → pressure
-    D_y = kron(D1y, eye(Nx, format='csr'), format='csr')      # (Nx*Nx) × (Nx*(Nx+1))
+    These sizes match the kron expansions in your original snippet.
+    Dirichlet boundaries are implicitly handled by the 1D stencil shapes.
+    """
+    # 1D forward-like stencil used in original (shape (Nx+1, Nx))
+    # (this matches your original Dx_f / Dy_b creation)
+    stencil_rows = np.ones(Nx + 1)
+    # shape (Nx+1, Nx): element i uses difference between col i and col i-1 (offsets 0 and -1)
+    D1 = diags([stencil_rows, -stencil_rows], offsets=[0, -1], shape=(Nx + 1, Nx), format='csr') / dx
 
-    # Gradients (exact adjoints)
-    G_x = -D_x.transpose().tocsr()   # ((Nx+1)*Nx) × (Nx*Nx)
-    G_y = -D_y.transpose().tocsr()   # (Nx*(Nx+1)) × (Nx*Nx)
+    # Note: original code used D_y = kron(I_{Nx+1}, D_y_backward)
+    # and D_x = kron(D_x_forward, I_{Nx+1}).
+    # Keep exactly those kron orders so shapes match your existing code.
+    D_y = kron(eye(Nx + 1, format='csr'), D1, format='csr')   # maps V -> P
+    D_x = kron(D1, eye(Nx + 1, format='csr'), format='csr')   # maps U -> P
+
+    # Gradients are exact adjoints (negative transposes)
+    G_x = (-D_x.transpose()).tocsr()
+    G_y = (-D_y.transpose()).tocsr()
 
     return G_x, G_y, D_x, D_y
 

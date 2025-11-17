@@ -361,47 +361,24 @@ def schur_rhs_new(rhs, lu_factorization,
     return np.concatenate((schur_rhs_x, schur_rhs_y))
 
 def build_staggered_Laps(Nx, dx):
-    """
-    Construct Lap_U and Lap_V using D^T D on the staggered MAC grids,
-    maintaining the same sizes and indexing order as your original code.
-    """
-
     dx2 = dx**2
 
-    # --- 1D second-derivative stencils (Dirichlet) ---
-    # matches your original D2_p and D2 exactly (including -3 diagonal closure)
+    # 1-D operators (Dirichlet in x, Dirichlet in y via zero ghosts)
+    # assumes Nx = Ny
     e_p = np.ones(Nx + 1)
-    e   = np.ones(Nx)
-
-    D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1],
-                 shape=(Nx + 1, Nx + 1), format='lil')
+    e = np.ones(Nx)
+    D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
     D2_p[0, 0] = -3.0
     D2_p[-1, -1] = -3.0
     D2_p = (D2_p / dx2).tocsr()
 
-    D2 = diags([e, -2*e, e], offsets=[-1, 0, 1],
-               shape=(Nx, Nx), format='csr') / dx2
+    D2 = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
+    D2 = (D2 / dx2).tocsr()
 
-    # --- 1D first-difference stencils (Dirichlet) ---
-    # forward/back difference pair consistent with the BC closure
-    D1_p = diags([e_p, -e_p], offsets=[0, -1], shape=(Nx + 1, Nx + 1), format='csr') / dx
-    D1   = diags([e,   -e  ], offsets=[0, -1], shape=(Nx, Nx), format='csr') / dx
+    Lap_U = kron(D2, eye(Nx + 1, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_p, format='csr')
+    Lap_V = kron(D2_p, eye(Nx, format='csr'), format='csr') + kron(eye(Nx + 1, format='csr'), D2, format='csr')
 
-    # --- U-grid derivative operators ---
-    # U is (Nx+1) x Nx → size N_U = (Nx+1)*Nx
-    Dux = kron(D1_p, eye(Nx, format='csr'), format='csr')    # derivative in x-direction on U grid
-    Duy = kron(eye(Nx + 1, format='csr'), D1, format='csr')  # derivative in y-direction on U grid
-
-    Lap_U = (Dux.T @ Dux) + (Duy.T @ Duy)
-
-    # --- V-grid derivative operators ---
-    # V is Nx x (Nx+1) → size N_V = Nx*(Nx+1)
-    Dvx = kron(D1, eye(Nx + 1, format='csr'), format='csr')  # derivative in x-direction on V grid
-    Dvy = kron(eye(Nx, format='csr'), D1_p, format='csr')    # derivative in y-direction on V grid
-
-    Lap_V = (Dvx.T @ Dvx) + (Dvy.T @ Dvy)
-
-    return Lap_U.tocsr(), Lap_V.tocsr()
+    return Lap_U, Lap_V
 
 def build_staggered_Grads_Divs(Nx, dx):
     """

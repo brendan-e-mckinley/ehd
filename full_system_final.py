@@ -4,13 +4,14 @@ import matplotlib.pyplot as plt
 import time
 from numba import jit
 from sksparse.cholmod import cholesky
-from scipy.sparse import spdiags, eye, kron, diags, lil_matrix
-from scipy.sparse.linalg import spsolve, gmres, LinearOperator
+from scipy.sparse import spdiags, eye, kron, diags, csr_matrix, bmat, lil_matrix
+from scipy.sparse.linalg import splu, spsolve, gmres, LinearOperator
 from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
 import CPEO_utils as cpeo
-import stokes_solver_utils as stokes
+#import stokes_solver_utils as stokes
+import stokes_solver_utils_fast as stokes
 
 ###########################
 ######  PARAMETERS  #######
@@ -136,6 +137,20 @@ G_y_nodes = kron(S_x, D_y_nodes, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
 
 # Staggered gradient and divergence operators
 G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
+
+## Prefactor big Stokes operator
+Z_UV = csr_matrix((N_U, N_V))
+Z_VU = csr_matrix((N_V, N_U))
+Z_PP = csr_matrix((N_P, N_P))
+
+# Saddle point system
+big_L = bmat([
+    [Lap_U, Z_VU,  -G_x_staggered],
+    [Z_UV,  Lap_V, -G_y_staggered],
+    [D_x_staggered,   D_y_staggered,   Z_PP] 
+], format='csr')
+
+stokes_LU = splu(big_L)
 
 #############################################
 #######  BOUNDARY/INITIAL CONDITIONS  #######
@@ -353,7 +368,8 @@ g = body_interpolated_y.ravel(order='F')
 f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
 g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, stokes_LU, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+#U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
 Uplot = U.reshape((Ny + 1, Nx), order='F')
 Vplot = V.reshape((Ny, Nx + 1), order='F')
@@ -514,7 +530,8 @@ for its in range(100000):
     f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
     g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-    U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+    U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, stokes_LU, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+    #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
     Uplot = U.reshape((Ny + 1, Nx), order='F')
     Vplot = V.reshape((Ny, Nx + 1), order='F')
@@ -566,7 +583,7 @@ residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_
 print(f'Full residual = {residual_check_full}')
 
 # Save results
-savemat('Full_System_Results_Clean.mat', {
+savemat('Full_System_Results_Block_Lap.mat', {
     'ctxt_Rphi': ctxt,
     'u_next': u_next,
     'Xint': Xint,
