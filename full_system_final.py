@@ -353,8 +353,8 @@ Nm_relevant_y = Nm_full[1:-1,:]
 Np_relevant_x = Np_full[:,1:-1]
 Nm_relevant_x = Nm_full[:,1:-1]
 
-bodyForces_x = (Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-bodyForces_y = (Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
+bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
 
 body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
 body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
@@ -511,8 +511,8 @@ for its in range(100000):
     Np_relevant_x = Np_full[:,1:-1]
     Nm_relevant_x = Nm_full[:,1:-1]
 
-    bodyForces_x = (Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-    bodyForces_y = (Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+    bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
+    bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
 
     body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
     body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
@@ -601,8 +601,16 @@ savemat('Full_System_Results_Block_Lap.mat', {
     'lam_Y': lam_Y
 })
 
+#Define circular mask (radius 0.25 centered at origin)
+radius = 0.25
+mask = (X**2 + Y**2) <= radius**2
+
+# Apply mask to UFull and VFull
+UFull[mask] = np.nan
+VFull[mask] = np.nan
+
 plt.figure(figsize=(8, 6))
-plt.streamplot(X, Y, UFull, VFull, color='red', density=10, linewidth=1, arrowsize=1.5)
+plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
 plt.xlabel('X-coordinate')
 plt.ylabel('Y-coordinate')
 plt.title('Flow Field Streamline Plot')
