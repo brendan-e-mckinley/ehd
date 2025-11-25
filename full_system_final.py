@@ -323,10 +323,10 @@ for col in range(Nib * 3):
     schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
 
 # Compute SVD once
-U, Sigma, Vh = np.linalg.svd(schurDense)
+U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
 
 # Use SVD solve to initialize 
-p_next = cpeo.solve_from_svd(U, Sigma, Vh, computedRHS)
+p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
 G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 u_next = G_u_n.copy()
 G_u_next = G_u_n.copy()
@@ -368,7 +368,18 @@ g = body_interpolated_y.ravel(order='F')
 f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
 g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, stokes_LU, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+# Build dense Schur matrix for hydrodynamic system
+schurDense_N = np.zeros((Nib * 2, Nib * 2))
+for col in range(Nib * 2): 
+    eye_mat_N = np.zeros(Nib * 2)
+    eye_mat_N[col] = 1
+    lam_X = eye_mat_N[0:Nib]
+    lam_Y = eye_mat_N[Nib:]
+    schurDense_N[:,col] = stokes.apply_Schur_new(lam_X, lam_Y, stokes_LU, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, cut)
+
+U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid = np.linalg.svd(schurDense_N)
+
+U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
 Uplot = U.reshape((Ny + 1, Nx), order='F')
@@ -408,25 +419,11 @@ for its in range(100000):
     #####  solve R*phi = Rho(u, phi)  #####
     #######################################
 
-    # Build dense Schur matrix
-    schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
     schurRHS = b_Op_Schur(ctxt, U_fluid, V_fluid)
     computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
-    schurDense = np.zeros((Nib * 3, Nib * 3))
-    for col in range(Nib * 3): 
-        eye_mat = np.zeros(Nib * 3)
-        eye_mat[col] = 1
-        p = eye_mat[0:Nib]
-        p_p = eye_mat[Nib:2*Nib]
-        p_m = eye_mat[2*Nib:3*Nib]
-        res_1, res_2, res_3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
-        schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
-
-    # Compute SVD once
-    U, Sigma, Vh = np.linalg.svd(schurDense)
 
     # Use SVD to solve
-    p_next = cpeo.solve_from_svd(U, Sigma, Vh, computedRHS)
+    p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
     G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
     u_next = G_u_n.copy()
@@ -439,7 +436,7 @@ for its in range(100000):
         computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
         
         # Use SVD to solve
-        p_n = cpeo.solve_from_svd(U, Sigma, Vh, computedRHS)
+        p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
         G_u_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
         m_n = min(m, inner_its + 1)
@@ -530,7 +527,7 @@ for its in range(100000):
     f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
     g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-    U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, stokes_LU, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+    U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
     #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
     Uplot = U.reshape((Ny + 1, Nx), order='F')

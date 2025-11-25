@@ -504,6 +504,80 @@ def solve(left_bound, right_bound, lu_factorization, f_bc, g_bc, h_bc, z_x, z_y,
 
     return U, V, P, lam_X, lam_Y
 
+def solve_from_svd(U, Sigma, Vh, rhs):
+    Sigma_inv_diag = 1 / Sigma
+
+    Sigma_inv = np.diag(Sigma_inv_diag)
+
+    res = Vh.conj().T @ Sigma_inv @ U.T @ rhs
+
+    return res
+
+# solve the system using a factorized dense Schur complement, assumes Dirichlet boundaries = 0 for x and y dimensions
+def solve_factorized(left_bound, right_bound, lu_factorization, U_schur, Sigma_schur, Vh_schur, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut):
+    x = np.linspace(left_bound, right_bound, Nx + 2)
+    dx = x[1] - x[0]
+    y = x.copy()
+    dy = dx
+
+    # IB
+    dth = dx / rad
+    theta = np.arange(0, 2*np.pi - dth, dth)
+    Nib = len(theta)
+    xib = rad * np.cos(theta) 
+    yib = rad * np.sin(theta)
+    # FOR TESTING ONLY
+    # xib = 0.5 + rad * np.cos(theta) 
+    # yib = 0.5 + rad * np.sin(theta)
+
+    delta_x, delta_y = make_composite_deltas(dx, n=3)
+
+    x_trunc = x[1:-1]    # length Nx
+    y_trunc = y[1:-1]    # length Ny
+    x_mid = x + dx / 2
+    y_mid = y + dy / 2
+    x_offset = x_mid[:-1]
+    y_offset = y_mid[:-1]
+
+    UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
+    VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
+
+    N_U = (Nx + 1) * Nx
+    N_V = Nx * (Nx + 1)
+    N_P = (Nx + 1) * (Nx + 1)
+
+    # # # preconditioner for stokes system
+    # Lap_P = D_x @ G_x + D_y @ G_y
+    # diag = Lap_P.diagonal()
+    # diag_safe = np.where(np.abs(diag) > 0, diag, 1.0)
+    # def apply_Minv(r): return r / diag_safe
+    # P_op = LinearOperator((N_P, N_P), matvec=apply_Minv, dtype=np.float64)
+
+    # M_U = diags(1.0 / Lap_U.diagonal())
+    # M_V = diags(1.0 / Lap_V.diagonal())
+
+    # preconditioner = D_x @ M_U @ G_x + D_y @ M_V @ G_y
+
+    RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
+    RHS_schur = schur_rhs_new(RHS, lu_factorization, UGridX, UGridY, VGridX, VGridY, delta_x, delta_y, xib, yib, N_U, N_V, N_P, Nib, cut)
+
+    # Solve
+    sol = solve_from_svd(U_schur, Sigma_schur, Vh_schur, RHS_schur)
+    
+    # Split (no change in ordering of partition)
+    lam_X = sol[:Nib]
+    lam_Y = sol[Nib:]
+
+    # Postprocessing: compute U and V
+    U, V, P = compute_U_V_P_postprocessing(lam_X, lam_Y, lu_factorization, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, f_bc, g_bc, h_bc, N_U, N_V, cut)
+
+    # # COMPUTE USING FULL OPERATOR CHECK
+    # Nu = apply_A(np.concatenate([U, V, P, lam_X, lam_Y]), UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x, G_y, D_x, D_y, cut)
+    # residual_check_N = np.linalg.norm(Nu - RHS) / np.linalg.norm(RHS)
+    # print(f'residual Nu = {residual_check_N}')
+
+    return U, V, P, lam_X, lam_Y
+
 #####################
 ######  test  #######
 #####################
