@@ -73,6 +73,9 @@ yib = rad * np.sin(theta)
 n_x = np.cos(theta)
 n_y = np.sin(theta)
 
+u_tilde_size = N_U + N_V + N_P + 2*Nib
+phi_tilde_size = 3*Nx*Ny + 3*Nib
+
 #########################
 ######  OPERATORS  ######
 #########################
@@ -307,11 +310,6 @@ delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
 
 ## Initialize variables for Rphi = rho solve
 schurRHS = b_Op_Schur(ctxt, U_fluid, V_fluid)
-DU = np.full((len(schurRHS), m), np.nan)
-DG = np.full((len(schurRHS), m), np.nan)
-
-u_n = ctxt.copy()
-p_guess = u_n[3*Nx*Ny:]
 
 # Build dense Schur matrix
 schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
@@ -332,10 +330,7 @@ U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
 
 # Use SVD solve to initialize 
 p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
-u_next = G_u_n.copy()
-G_u_next = G_u_n.copy()
-err = []
+phi_tilde_current = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
 # compute body forces 
 Phi_full = np.zeros((Ny+2, Nx+2))
@@ -385,6 +380,7 @@ for col in range(Nib * 2):
 U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid = np.linalg.svd(schurDense_N)
 
 U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+u_tilde_next = np.concatenate([U, V, P, lam_X, lam_Y])
 #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
 Uplot = U.reshape((Ny + 1, Nx), order='F')
@@ -416,82 +412,31 @@ VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
 U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 
+
+############################################
+#######  ANDERSON ARRAYS & MATRICES  #######
+############################################
+DU = np.full((u_tilde_size + phi_tilde_size, m), np.nan)
+DG = np.full((u_tilde_size + phi_tilde_size, m), np.nan)
+
+u_n = np.concatenate([np.zeros(u_tilde_size), ctxt.copy()])
+G_u_n = np.concatenate([u_tilde_next, phi_tilde_current])
+u_next = G_u_n.copy()
+G_u_next = G_u_n.copy()
+err = []
+
 ##################################
 #######  FULL SYSTEM LOOP  #######
 ##################################
-for its in range(100000):
-    #######################################
-    #####  solve R*phi = Rho(u, phi)  #####
-    #######################################
-
-    schurRHS = b_Op_Schur(ctxt, U_fluid, V_fluid)
+for inner_its in range(100000):
+    schurRHS = b_Op_Schur(phi_tilde_current, U_fluid, V_fluid)
     computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
-
+    
     # Use SVD to solve
-    p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-    G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
+    p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
+    phi_tilde_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
-    u_next = G_u_n.copy()
-    G_u_next = G_u_n.copy()
-    err = []
 
-    # Anderson acceleration loop
-    for inner_its in range(100000):
-        schurRHS = b_Op_Schur(u_next, U_fluid, V_fluid)
-        computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
-        
-        # Use SVD to solve
-        p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-        G_u_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
-
-        m_n = min(m, inner_its + 1)
-        
-        # Store differences
-        if inner_its < m:
-            DU[:, inner_its] = u_next - u_n
-            DG[:, inner_its] = G_u_next - G_u_n
-        else:
-            DU = np.roll(DU, -1, axis=1)
-            DG = np.roll(DG, -1, axis=1)
-            DU[:, -1] = u_next - u_n
-            DG[:, -1] = G_u_next - G_u_n
-        
-        f_n = G_u_next - u_next
-        DF = DG[:, :m_n] - DU[:, :m_n]
-        
-        # QR decomposition
-        gamma, residuals, rank, s = lstsq(DF, f_n)
-        
-        u_n = u_next.copy()
-        G_u_n = G_u_next.copy()
-        
-        u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
-        
-        # Extract solution components
-        Phi = u_next[:Ny*Nx].reshape((Ny, Nx), order='F')
-        Np = u_next[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
-        Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
-        p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
-        p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
-        p_m = u_next[3*Nx*Ny+2*Nib:]
-
-        p_next = u_next[3*Nx*Ny:]
-        
-        # Check convergence
-        res1, res2, res3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
-        schur_next = np.concatenate([res1, res2, res3])
-        err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
-        
-        err.append(err_curr)
-        
-        print(f'Iteration {inner_its}: residual = {err_curr}')
-        
-        if err_curr < 1e-4:
-            print('Rphi = rho Converged!')
-            break
-    
-    ctxt = u_next.copy()
-    
     # compute body forces 
     Phi_full = np.zeros((Ny+2, Nx+2))
     Np_full = np.ones((Ny+2, Nx+2))
@@ -533,6 +478,7 @@ for its in range(100000):
     g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
     U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+    u_tilde_next = np.concatenate([U, V, P, lam_X, lam_Y])
     #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
     Uplot = U.reshape((Ny + 1, Nx), order='F')
@@ -562,27 +508,110 @@ for its in range(100000):
     U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
     V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 
-    residual_check_RHS = b_Op(u_next, U_fluid, V_fluid)
-    residual_check_AxOp = AxOp(u_next)
+    G_u_next = np.concatenate([u_tilde_next, phi_tilde_next])
+
+    m_n = min(m, inner_its + 1)
+    
+    # Store differences
+    if inner_its < m:
+        DU[:, inner_its] = u_next - u_n
+        DG[:, inner_its] = G_u_next - G_u_n
+    else:
+        DU = np.roll(DU, -1, axis=1)
+        DG = np.roll(DG, -1, axis=1)
+        DU[:, -1] = u_next - u_n
+        DG[:, -1] = G_u_next - G_u_n
+    
+    f_n = G_u_next - u_next
+    DF = DG[:, :m_n] - DU[:, :m_n]
+    
+    # QR decomposition
+    gamma, residuals, rank, s = lstsq(DF, f_n)
+    
+    u_n = u_next.copy()
+    G_u_n = G_u_next.copy()
+    
+    u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
+    
+    # Extract solution components
+    phi_slice = u_next[u_tilde_size:]
+    Phi = phi_slice[:Ny*Nx].reshape((Ny, Nx), order='F')
+    Np = phi_slice[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
+    Nm = phi_slice[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
+    p = phi_slice[3*Nx*Ny:3*Nx*Ny+Nib]
+    p_p = phi_slice[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+    p_m = phi_slice[3*Nx*Ny+2*Nib:]
+
+    # Define circular mask (radius 0.25 centered at origin)
+    radius = 0.25
+    mask = (X**2 + Y**2) <= radius**2
+
+    # Apply mask to UFull and VFull
+    UFull[mask] = np.nan
+    VFull[mask] = np.nan
+
+    plt.figure(figsize=(8, 6))
+    plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
+    plt.xlabel('X-coordinate')
+    plt.ylabel('Y-coordinate')
+    plt.title('Flow Field Streamline Plot')
+    plt.xlim(-2, 2)
+    plt.ylim(-2, 2)
+    plt.grid(True)
+
+    cmap = plt.cm.spring
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot_surface(X, Y, UFull, cmap=cmap, edgecolor='none')
+    ax.set_title("U")
+    ax.set_xlabel("x"); ax.set_ylabel("y")
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
+    ax.set_title("V")
+    ax.set_xlabel("x"); ax.set_ylabel("y")
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
+    ax.set_title("|velocity|")
+    ax.set_xlabel("x"); ax.set_ylabel("y")
+
+    plt.show()
+
+    p_next = phi_slice[3*Nx*Ny:]
+    
+    # Check convergence
+    res1, res2, res3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
+    schur_next = np.concatenate([res1, res2, res3])
+    err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
+    
+    err.append(err_curr)
+    
+    print(f'Iteration {inner_its}: residual = {err_curr}')
+
+    residual_check_RHS = b_Op(phi_tilde_next, U_fluid, V_fluid)
+    residual_check_AxOp = AxOp(phi_tilde_next)
     residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
     print(f'New residual Rphi = {residual_check}')
 
-    if residual_check < 1e-4:
+    # check Nu residual 
+    Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
+    u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
+    Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, cut)
+    residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
+    print(f'New residual Nu = {residual_check_N}')
+
+    # check system residual
+    full_system_operator_applied = np.concatenate([Nu, residual_check_AxOp])
+    full_system_RHS = np.concatenate([Nu_RHS, residual_check_RHS])
+    residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_RHS) / np.linalg.norm(full_system_RHS)
+    print(f'Full residual = {residual_check_full}')
+
+    if residual_check_full < 1e-4:
         print('Full system converged!')
         break
-
-# check Nu residual 
-Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
-Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, cut)
-residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
-print(f'New residual Nu = {residual_check_N}')
-
-# check system residual
-full_system_operator_applied = np.concatenate([Nu, residual_check_AxOp])
-full_system_RHS = np.concatenate([Nu_RHS, residual_check_RHS])
-residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_RHS) / np.linalg.norm(full_system_RHS)
-print(f'Full residual = {residual_check_full}')
 
 # end profiling
 pr.disable()
