@@ -11,7 +11,6 @@ from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
 import CPEO_utils as cpeo
-#import stokes_solver_utils as stokes
 import stokes_solver_utils_fast as stokes
 
 ###########################
@@ -150,64 +149,6 @@ big_L = bmat([
     [Z_UV,  Lap_V, -G_y_staggered],
     [D_x_staggered,   D_y_staggered,   Z_PP] 
 ], format='csr')
-
-vals, vecs = eigs(-big_L, k=6, which='SM')
-
-print(vals)
-
-# k = 6
-
-# # Factorization for shift-invert
-# lu = splu(big_L)   # very fast for sparse saddle point blocks
-
-# print("made it to LU factorization")
-
-# def solve_shift(v):
-#     return lu.solve(v)
-
-# # Small eigenvalues (shift-invert around sigma=0)
-# eigvals_small, _ = eigsh(big_L, k=k, sigma=0.0, OPinv=solve_shift)
-
-# print("made it to eigs small")
-
-# # Largest eigenvalues (ordinary)
-# eigvals_large, _ = eigsh(big_L, k=k, which='LM')
-
-# print("made it to eigs large")
-
-# eigvals_small = np.real(1.0 / eigvals_small)  # invert back
-# eigvals_large = np.real(eigvals_large)
-
-# # # Suppose big_L is already defined as your saddle-point matrix
-# # # Compute the 6 largest magnitude eigenvalues
-# # num_eig = 2
-
-# # start_time = time.time()
-
-# # # Largest magnitude eigenvalues
-# # eigvals_large, _ = eigsh(big_L, k=num_eig, which='LM')
-
-# # # Smallest magnitude eigenvalues
-# # eigvals_small, _ = eigsh(big_L, k=num_eig, which='SM')
-
-# # end_time = time.time()
-
-# # time_net = end_time - start_time
-
-# # # Take real parts (if small imaginary parts exist due to numerical errors)
-# # eigvals_large = np.real(eigvals_large)
-# # eigvals_small = np.real(eigvals_small)
-
-# # Plot
-# plt.figure(figsize=(8,5))
-# plt.plot(range(1,k+1), np.sort(eigvals_small), 'o-', label='Smallest eigenvalues')
-# plt.plot(range(1,k+1), np.sort(eigvals_large), 's-', label='Largest eigenvalues')
-# plt.xlabel('Index')
-# plt.ylabel('Eigenvalue')
-# plt.title('Smallest and Largest 6 Eigenvalues of big_L')
-# plt.legend()
-# plt.grid(True)
-# plt.show()
 
 stokes_LU = splu(big_L)
 
@@ -669,40 +610,40 @@ pr.dump_stats("profile_fast.prof")
 #     'lam_Y': lam_Y
 # })
 
-# # Define circular mask (radius 0.25 centered at origin)
-# radius = 0.25
-# mask = (X**2 + Y**2) <= radius**2
+# Define circular mask (radius 0.25 centered at origin)
+radius = 0.25
+mask = (X**2 + Y**2) <= radius**2
 
-# # Apply mask to UFull and VFull
-# UFull[mask] = np.nan
-# VFull[mask] = np.nan
+# Apply mask to UFull and VFull
+UFull[mask] = np.nan
+VFull[mask] = np.nan
 
-# plt.figure(figsize=(8, 6))
-# plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
-# plt.xlabel('X-coordinate')
-# plt.ylabel('Y-coordinate')
-# plt.title('Flow Field Streamline Plot')
-# plt.xlim(-2, 2)
-# plt.ylim(-2, 2)
-# plt.grid(True)
+plt.figure(figsize=(8, 6))
+plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
+plt.xlabel('X-coordinate')
+plt.ylabel('Y-coordinate')
+plt.title('Flow Field Streamline Plot')
+plt.xlim(-2, 2)
+plt.ylim(-2, 2)
+plt.grid(True)
 
-# cmap = plt.cm.spring
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, UFull, cmap=cmap, edgecolor='none')
-# ax.set_title("U")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(X, Y, UFull, cmap=cmap, edgecolor='none')
+ax.set_title("U")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
-# ax.set_title("V")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
+ax.set_title("V")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
-# ax.set_title("|velocity|")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
+ax.set_title("|velocity|")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# plt.show()
+plt.show()
