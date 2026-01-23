@@ -19,7 +19,7 @@ from matplotlib.patches import Circle
 ###########################
 
 ## Grid parameters
-Nx = 96  # 256; % number of grid points along one direction
+Nx = 160  # 256; % number of grid points along one direction
 L = 4.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -66,11 +66,28 @@ y_offset = y_mid[:-1]
 UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
 VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
-windmillLD = loadmat('Windmill_Geom_Updated.mat')
-xib = windmillLD['x']
-yib = windmillLD['y']
-n_x = windmillLD['nx']
-n_y = windmillLD['ny']
+## IMMERSED BOUNDARY
+
+# small number of known values
+windmillLD_small = loadmat('Windmill_Geom_Coarse.mat')
+xib_small = windmillLD_small['x']
+yib_small = windmillLD_small['y']
+n_x_small = windmillLD_small['nx']
+n_y_small = windmillLD_small['ny']
+
+xib_small  = np.asarray(xib_small,  dtype=np.float64).ravel()
+yib_small  = np.asarray(yib_small,  dtype=np.float64).ravel()
+n_x_small = np.asarray(n_x_small, dtype=np.float64).ravel()
+n_y_small = np.asarray(n_y_small, dtype=np.float64).ravel()
+
+Nib_small = len(xib_small)
+
+# interpolate to true geometry
+windmillLD_small = loadmat('Windmill_Geom_Larger_Next.mat')
+xib = windmillLD_small['x']
+yib = windmillLD_small['y']
+n_x = windmillLD_small['nx']
+n_y = windmillLD_small['ny']
 
 xib  = np.asarray(xib,  dtype=np.float64).ravel()
 yib  = np.asarray(yib,  dtype=np.float64).ravel()
@@ -257,12 +274,35 @@ y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 # Q_p_init = np.zeros(Nib)
 # Q_m_init = np.zeros(Nib)
 
+ds = np.hypot(np.diff(xib_small), np.diff(yib_small))
+s = np.concatenate(([0], np.cumsum(ds)))
+s_new = np.linspace(0, s[-1], Nib)
+
 Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
 N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-Q_init = Q_ld
-Q_p_init = Q_p_ld
-Q_m_init = Q_m_ld
+Q_init = Akima1DInterpolator(s, Q_ld, method="makima", extrapolate=True)(s_new)
+Q_p_init = Akima1DInterpolator(s, Q_p_ld, method="makima", extrapolate=True)(s_new)
+Q_m_init = Akima1DInterpolator(s, Q_m_ld, method="makima", extrapolate=True)(s_new)
+# Q_init = Q_ld
+# Q_p_init = Q_p_ld
+# Q_m_init = Q_m_ld
+
+# Create the figure and axes
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+
+# Plot the scatter points
+ax.scatter(xib_small, yib_small, Q_ld, marker='o', c='b')
+
+# Create the figure and axes
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+
+# Plot the scatter points
+ax.scatter(xib, yib, Q_init, marker='o', c='b')
+plt.show()
+
 
 ctxt = np.concatenate([
     Phi_init.ravel(order='F'),
@@ -534,7 +574,7 @@ for its in range(100000):
 
             #plt.show()
         
-        if err_curr < 1e-3:
+        if err_curr < 5e-3:
             # fig = plt.figure(figsize=(10, 7))
             # ax = fig.add_subplot(111, projection='3d') # Use add_subplot to enable 3D projection
 
@@ -551,18 +591,6 @@ for its in range(100000):
             # plt.show()
             print('Rphi = rho Converged!')
             break
-    
-    # Save results
-    # savemat('Windmill_Results.mat', {
-    #     'ctxt': ctxt,
-    #     'Nib': Nib, 
-    #     'Nx': Nx, 
-    #     'Ny': Ny, 
-    #     'xib': xib,
-    #     'yib': yib,
-    #     'Xint': Xint,
-    #     'Yint': Yint
-    # })
 
     ctxt = u_next.copy()
     
@@ -640,7 +668,7 @@ for its in range(100000):
     residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
     print(f'New residual Rphi = {residual_check}')
 
-    if residual_check < 1e-3:
+    if residual_check < 5e-3:
         print('Full system converged!')
         break
 
@@ -657,17 +685,24 @@ full_system_RHS = np.concatenate([Nu_RHS, residual_check_RHS])
 residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_RHS) / np.linalg.norm(full_system_RHS)
 print(f'Full residual = {residual_check_full}')
     
-    # # Save results
-    # savemat('Snowman_Results.mat', {
-    #     'ctxt': ctxt,
-    #     'Nib': Nib, 
-    #     'Nx': Nx, 
-    #     'Ny': Ny, 
-    #     'xib': xib,
-    #     'yib': yib,
-    #     'Xint': Xint,
-    #     'Yint': Yint
-    # })
+#Save results
+savemat('Windmill_Results_Plot_Grant.mat', {
+    'ctxt': ctxt,
+    'Phi': Phi,
+    'Np': Np,
+    'Nm': Nm, 
+    'UFull': UFull,
+    'VFull': VFull,
+    'Nib': Nib, 
+    'Nx': Nx, 
+    'Ny': Ny, 
+    'xib': xib,
+    'yib': yib,
+    'Xint': Xint,
+    'Yint': Yint,
+    'X': X,
+    'Y': Y
+})
 
 ###################################
 #######  SAVE/PLOT RESULTS  #######
