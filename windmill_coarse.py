@@ -14,12 +14,12 @@ import CPEO_utils as cpeo
 import stokes_solver_utils_fast as stokes
 from matplotlib.patches import Circle
 
-###########################
+###########################s
 ######  PARAMETERS  #######
 ###########################
 
 ## Grid parameters
-Nx = 128  # 256; % number of grid points along one direction
+Nx = 96  # 256; % number of grid points along one direction
 L = 4.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -37,7 +37,7 @@ delta_layer = 0.1 * ((5 * dx) / (5*dx_finest)) # 5*dx; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
 # Anderson acceleration parameters
-beta = .02
+beta = .01
 m = 50
 
 ##########################
@@ -66,11 +66,11 @@ y_offset = y_mid[:-1]
 UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
 VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
-snowmanLD = loadmat('Snowman_Geom_Updated.mat')
-xib = snowmanLD['x']
-yib = snowmanLD['y']
-n_x = snowmanLD['nx']
-n_y = snowmanLD['ny']
+windmillLD = loadmat('Windmill_Geom_Updated.mat')
+xib = windmillLD['x']
+yib = windmillLD['y']
+n_x = windmillLD['nx']
+n_y = windmillLD['ny']
 
 xib  = np.asarray(xib,  dtype=np.float64).ravel()
 yib  = np.asarray(yib,  dtype=np.float64).ravel()
@@ -220,7 +220,7 @@ ctxt_BCs = np.concatenate([
 ])
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('Snowman_Results.mat')
+ld = loadmat('Windmill_Results.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
 Ny_ld = int(ld['Ny'][0, 0])
@@ -243,7 +243,7 @@ Yint_ld = ld['Yint']
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-# Interpolate initial guesses
+# Interpolate initial guessess
 # Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
 # N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 # N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
@@ -263,7 +263,6 @@ N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bou
 Q_init = Q_ld
 Q_p_init = Q_p_ld
 Q_m_init = Q_m_ld
-
 
 ctxt = np.concatenate([
     Phi_init.ravel(order='F'),
@@ -519,7 +518,7 @@ for its in range(100000):
         
         print(f'Iteration {inner_its}: residual = {err_curr}')
 
-        if (inner_its % 1000 == 0):
+        if (inner_its % 10000 == 0):
             fig = plt.figure(figsize=(10, 7))
             ax = fig.add_subplot(111, projection='3d') # Use add_subplot to enable 3D projection
 
@@ -533,9 +532,9 @@ for its in range(100000):
             ax.set_zlabel('Z axis')
             fig.colorbar(surf, shrink=0.5, aspect=5)
 
-            plt.show()
+            #plt.show()
         
-        if err_curr < 1e-4:
+        if err_curr < 1e-3:
             # fig = plt.figure(figsize=(10, 7))
             # ax = fig.add_subplot(111, projection='3d') # Use add_subplot to enable 3D projection
 
@@ -553,6 +552,18 @@ for its in range(100000):
             print('Rphi = rho Converged!')
             break
     
+    # Save results
+    # savemat('Windmill_Results.mat', {
+    #     'ctxt': ctxt,
+    #     'Nib': Nib, 
+    #     'Nx': Nx, 
+    #     'Ny': Ny, 
+    #     'xib': xib,
+    #     'yib': yib,
+    #     'Xint': Xint,
+    #     'Yint': Yint
+    # })
+
     ctxt = u_next.copy()
     
     # compute body forces 
@@ -629,7 +640,7 @@ for its in range(100000):
     residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
     print(f'New residual Rphi = {residual_check}')
 
-    if residual_check < 1e-4:
+    if residual_check < 1e-3:
         print('Full system converged!')
         break
 
@@ -689,25 +700,40 @@ print(f'Full residual = {residual_check_full}')
 # UFull[mask] = np.nan
 # VFull[mask] = np.nan
 
-# radii
-R_big   = 0.50
-R_small = 0.25
+# ------------------------------------------------------
+# parameters
+# ------------------------------------------------------
+R  = 0.25
+R_small = 0.1
+shift = 0.05
 
-# centers
-x_big,   y_big   = 0.0, 0.0
-x_small, y_small = 0.0, R_big + 2*R_small
+# ------------------------------------------------------
+# triangle layout (with adjustable spacing)
+# ------------------------------------------------------
+sep = 1.4      # spacing factor
+h = np.sqrt(3)*R
+
+centers = [
+    sep*np.array([-R - shift, -h/2]),   # bottom-left
+    sep*np.array([ R + shift, -h/2]),   # bottom-right
+    sep*np.array([ 0.0,  h/2 + shift])  # top-middle
+]
 
 # optional padding to match IB delta support
 pad = 0 * dx   # set to 0.0 if you do NOT want padding
 
 # big circle mask
-mask_big = (X - x_big)**2 + (Y - y_big)**2 <= (R_big + pad)**2
+mask_1 = (X - centers[0][0])**2 + (Y - centers[0][1])**2 <= (R + pad)**2
+mask_2 = (X - centers[1][0])**2 + (Y - centers[1][1])**2 <= (R + pad)**2
+mask_3 = (X - centers[2][0])**2 + (Y - centers[2][1])**2 <= (R + pad)**2
 
-# small circle mask
-mask_small = (X - x_small)**2 + (Y - y_small)**2 <= (R_small + pad)**2
+# little circle mask
+mask_4 = (X - 0.2)**2 + (Y - 0.05)**2 <= (R_small + pad)**2
+mask_5 = (X + 0.2)**2 + (Y - 0.05)**2 <= (R_small + pad)**2
+mask_6 = (X)**2 + (Y + 0.2)**2 <= (R_small + pad)**2
 
 # union of circles
-mask = mask_big | mask_small
+mask = mask_1 | mask_2 | mask_3 | mask_4 | mask_5 | mask_6
 
 # apply mask
 UFull[mask] = np.nan
@@ -717,41 +743,74 @@ plt.figure(figsize=(8, 6))
 plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
 
 # apply mask to other quantities
-# big circle mask
-mask_big_int = (Xint - x_big)**2 + (Yint - y_big)**2 <= (R_big + pad)**2
-
-# small circle mask
-mask_small_int = (Xint - x_small)**2 + (Yint - y_small)**2 <= (R_small + pad)**2
+mask_1 = (Xint - centers[0][0])**2 + (Yint - centers[0][1])**2 <= (R + pad)**2
+mask_2 = (Xint - centers[1][0])**2 + (Yint - centers[1][1])**2 <= (R + pad)**2
+mask_3 = (Xint - centers[2][0])**2 + (Yint - centers[2][1])**2 <= (R + pad)**2
 
 # union of circles
-mask_int = mask_big_int | mask_small_int
+mask_int = mask_1 | mask_2 | mask_3
 
-Np[mask_int] = np.nan
-Nm[mask_int] = np.nan
-Phi[mask_int] = np.nan
+# Np[mask_int] = np.nan
+# Nm[mask_int] = np.nan
+# Phi[mask_int] = np.nan
 
 # ------------------------------------------------------
 # Filled immersed-boundary geometry
 # ------------------------------------------------------
-circle_big = Circle(
-    (x_big, y_big),
-    R_big,
+circle_1 = Circle(
+    (centers[0][0], centers[0][1]),
+    R,
     facecolor='black',
     edgecolor='none',
     zorder=10
 )
 
-circle_small = Circle(
-    (x_small, y_small),
-    R_small,
+circle_2 = Circle(
+    (centers[1][0], centers[1][1]),
+    R,
+    facecolor='black',
+    edgecolor='none',
+    zorder=10
+)
+
+circle_3 = Circle(
+    (centers[2][0], centers[2][1]),
+    R,
+    facecolor='black',
+    edgecolor='none',
+    zorder=10
+)
+
+circle_4 = Circle(
+    (0.2, 0.05),
+    0.1,
+    facecolor='black',
+    edgecolor='none',
+    zorder=10
+)
+
+circle_5 = Circle(
+    (-0.2, 0.05),
+    0.1,
+    facecolor='black',
+    edgecolor='none',
+    zorder=10
+)
+circle_6 = Circle(
+    (0, -0.2),
+    0.1,
     facecolor='black',
     edgecolor='none',
     zorder=10
 )
 
 ax = plt.gca()
-ax.add_patch(circle_big)
-ax.add_patch(circle_small)
+ax.add_patch(circle_1)
+ax.add_patch(circle_2)
+ax.add_patch(circle_3)
+ax.add_patch(circle_4)
+ax.add_patch(circle_5)
+ax.add_patch(circle_6)
 
 # ------------------------------------------------------
 # Formatting
@@ -877,3 +936,22 @@ fig.colorbar(surf, shrink=0.5, aspect=5)
 plt.xlim(-2, 2)
 plt.ylim(-2, 2)
 plt.show()
+
+#Save results
+savemat('Windmill_Results_Coarse.mat', {
+    'ctxt': ctxt,
+    'Phi': Phi,
+    'Np': Np,
+    'Nm': Nm, 
+    'UFull': UFull,
+    'VFull': VFull,
+    'Nib': Nib, 
+    'Nx': Nx, 
+    'Ny': Ny, 
+    'xib': xib,
+    'yib': yib,
+    'Xint': Xint,
+    'Yint': Yint,
+    'X': X,
+    'Y': Y
+})

@@ -9,7 +9,7 @@ yib = ld.yib;
 scatter(xib, yib, 40, 'k', 'filled')
 
 % Interpolate along open curve
-pt = interparc(40, xib, yib, 'spline');
+pt = interparc(8000, xib, yib, 'spline');
 
 x = pt(:,1);
 y = pt(:,2);
@@ -17,6 +17,15 @@ y = pt(:,2);
 x(end) = [];
 y(end) = [];
 N = length(x);
+
+% --- Subsample boundary ---
+num_pts = 81;
+idx = round(linspace(1, N, num_pts));
+x = x(idx);
+y = y(idx);
+x(1) = [];
+y(1) = [];
+N = num_pts;
 
 % ------------------------------------------------------
 % Compute unit tangents
@@ -63,5 +72,5 @@ ylabel('y')
 legend('Boundary points', 'Unit normals')
 
 
-save('Windmill_Geom_Updated.mat', 'x', 'y', 'nx', 'ny')
+save('Windmill_Geom_Larger_Next_Finer.mat', 'x', 'y', 'nx', 'ny')
 

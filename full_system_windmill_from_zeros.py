@@ -14,12 +14,12 @@ import CPEO_utils as cpeo
 import stokes_solver_utils_fast as stokes
 from matplotlib.patches import Circle
 
-###########################s
+###########################
 ######  PARAMETERS  #######
 ###########################
 
 ## Grid parameters
-Nx = 160  # 256; % number of grid points along one direction
+Nx = 202  # 256; % number of grid points along one direction
 L = 4.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -69,7 +69,7 @@ VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 ## IMMERSED BOUNDARY
 
 # small number of known values
-windmillLD_small = loadmat('Windmill_Geom_Coarse.mat')
+windmillLD_small = loadmat('Windmill_Geom_Larger_Next.mat')
 xib_small = windmillLD_small['x']
 yib_small = windmillLD_small['y']
 n_x_small = windmillLD_small['nx']
@@ -83,7 +83,7 @@ n_y_small = np.asarray(n_y_small, dtype=np.float64).ravel()
 Nib_small = len(xib_small)
 
 # interpolate to true geometry
-windmillLD_small = loadmat('Windmill_Geom_Larger_Next.mat')
+windmillLD_small = loadmat('Windmill_Geom_Larger_Next_Finer.mat')
 xib = windmillLD_small['x']
 yib = windmillLD_small['y']
 n_x = windmillLD_small['nx']
@@ -237,7 +237,7 @@ ctxt_BCs = np.concatenate([
 ])
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('Windmill_Results.mat')
+ld = loadmat('Windmill_Results_Plot_Grant.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
 Ny_ld = int(ld['Ny'][0, 0])
@@ -686,7 +686,7 @@ residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_
 print(f'Full residual = {residual_check_full}')
     
 #Save results
-savemat('Windmill_Results_Plot_Grant.mat', {
+savemat('Windmill_Results_Plot_Grant_Finer.mat', {
     'ctxt': ctxt,
     'Phi': Phi,
     'Np': Np,
@@ -701,7 +701,8 @@ savemat('Windmill_Results_Plot_Grant.mat', {
     'Xint': Xint,
     'Yint': Yint,
     'X': X,
-    'Y': Y
+    'Y': Y,
+    'delta_layer': delta_layer
 })
 
 ###################################

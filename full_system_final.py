@@ -18,7 +18,7 @@ import stokes_solver_utils_fast as stokes
 ###########################
 
 ## Grid parameters
-Nx = 450  # 256; % number of grid points along one direction
+Nx = 128  # 256; % number of grid points along one direction
 L = 2.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -33,7 +33,7 @@ delta_layer = 0.1  # 5*dx; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
 # Anderson acceleration parameters
-beta = 0.2
+beta = 0.05
 m = 50
 
 ##########################
@@ -63,14 +63,60 @@ UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
 VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
 ## Immersed boundary
-rad = 0.25
-dth = dx / rad
-theta = np.arange(0, 2*np.pi - dth, dth)
-Nib = len(theta)
-xib = rad * np.cos(theta) 
-yib = rad * np.sin(theta)
-n_x = np.cos(theta)
-n_y = np.sin(theta)
+# radii
+R_big = 0.50
+R_small = 0.25
+
+# centers
+x_big, y_big = 0.0, 0.0
+x_small, y_small = 0.0, R_big + 2 * R_small   # tangent on top
+
+# angular spacings (keep point spacing ~ dx)
+dth_big   = dx / R_big
+dth_small = dx / R_small
+
+theta_big   = np.arange(0, 2*np.pi - dth_big, dth_big)
+theta_small = np.arange(0, 2*np.pi - dth_small, dth_small)
+
+# big circle
+xib_big = x_big + R_big * np.cos(theta_big)
+yib_big = y_big + R_big * np.sin(theta_big)
+n_x_big = np.cos(theta_big)
+n_y_big = np.sin(theta_big)
+
+# small circle
+xib_small = x_small + R_small * np.cos(theta_small)
+yib_small = y_small + R_small * np.sin(theta_small)
+n_x_small = np.cos(theta_small)
+n_y_small = np.sin(theta_small)
+
+# combine
+xib = np.concatenate([xib_big, xib_small])
+yib = np.concatenate([yib_big, yib_small])
+n_x = np.concatenate([n_x_big, n_x_small])
+n_y = np.concatenate([n_y_big, n_y_small])
+
+# remove duplicate / very-close points at the tangent (optional but recommended)
+tol = 1e-10  # tiny tolerance; increase if floats are noisy
+keep = np.ones(len(xib), dtype=bool)
+for i in range(len(xib)):
+    if not keep[i]:
+        continue
+    # find other points extremely close to i (but don't compare point to itself)
+    d2 = (xib - xib[i])**2 + (yib - yib[i])**2
+    # keep the first occurrence, drop others within tol
+    close = (d2 < tol) & (d2 > 0)
+    if np.any(close):
+        keep[np.where(close)[0]] = False
+
+xib = xib[keep]
+yib = yib[keep]
+n_x = n_x[keep]
+n_y = n_y[keep]
+Nib = len(xib)
+
+plt.scatter(xib, yib)
+plt.show()
 
 #########################
 ######  OPERATORS  ######
@@ -229,9 +275,9 @@ y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
 N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
-Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
-Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
+Q_init = np.concatenate([Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta_big), np.zeros_like(theta_small)])[keep]
+Q_p_init = np.concatenate([Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta_big), np.zeros_like(theta_small)])[keep]
+Q_m_init = np.concatenate([Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta_big), np.zeros_like(theta_small)])[keep]
 
 ctxt = np.concatenate([
     Phi_init.ravel(order='F'),
@@ -379,8 +425,7 @@ for col in range(Nib * 2):
 
 U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid = np.linalg.svd(schurDense_N)
 
-U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
-#U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, xib, yib, Nib, Nx, cut)
 
 Uplot = U.reshape((Ny + 1, Nx), order='F')
 Vplot = V.reshape((Ny, Nx + 1), order='F')
@@ -530,9 +575,8 @@ for its in range(100000):
 
     f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
     g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
-
-    U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
-    #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+ 
+    U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, xib, yib, Nib, Nx, cut)
 
     Uplot = U.reshape((Ny + 1, Nx), order='F')
     Vplot = V.reshape((Ny, Nx + 1), order='F')

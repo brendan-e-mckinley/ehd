@@ -256,78 +256,125 @@ def schur_rhs_N(rhs, Lap_U, Lap_V, D_x, D_y, delta_x, delta_y, UGridX, UGridY, V
     return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
 
 # Spreading operator
-@jit(nopython=True)
-def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
+def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r):
     Sq = np.zeros_like(X)
     Nq = len(q)
 
-    dx = X[0, 1] - X[0, 0]
-    dy = Y[1, 0] - Y[0, 0]
-    Nx = X.shape[1]
-    Ny = Y.shape[0]
-
     for k in range(Nq):
-        xk = xq[k]
-        yk = yq[k]
-        
-        i_min = max(int((xk - cut - X[0, 0]) / dx), 0)
-        i_max = min(int((xk + cut - X[0, 0]) / dx) + 1, Nx)
-        j_min = max(int((yk - cut - Y[0, 0]) / dy), 0)
-        j_max = min(int((yk + cut - Y[0, 0]) / dy) + 1, Ny)
-        
-        X_local = X[j_min:j_max, i_min:i_max]
-        Y_local = Y[j_min:j_max, i_min:i_max]
-        
-        Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2)
-        
-        mask = (Rk <= cut)
-        
-        n_dot_rhat = np.where(mask,
-            (n_x[k] * (X_local - xk) + n_y[k] * (Y_local - yk)) / Rk,
-            0.0
-        )
-        
-        contribution = q[k] * n_dot_rhat * delta_r(Rk) * mask
-        Sq[j_min:j_max, i_min:i_max] += contribution
-    
+        dx = X - xq[k]
+        dy = Y - yq[k]
+        R = np.sqrt(dx*dx + dy*dy)
+
+        # MATLAB: mask = (Rk <= cut)
+        mask = R > 0.0
+
+        n_dot_rhat = np.zeros_like(R)
+        n_dot_rhat[mask] = (n_x[k]*dx[mask] + n_y[k]*dy[mask]) / R[mask]
+
+        Sq += q[k] * n_dot_rhat * delta_r(R)
+
     return Sq
 
+# @jit(nopython=True)
+# def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
+#     Sq = np.zeros_like(X)
+#     Nq = len(q)
+
+#     dx = X[0, 1] - X[0, 0]
+#     dy = Y[1, 0] - Y[0, 0]
+#     Nx = X.shape[1]
+#     Ny = Y.shape[0]
+
+#     for k in range(Nq):
+#         xk = xq[k]
+#         yk = yq[k]
+        
+#         i_min = max(int((xk - cut - X[0, 0]) / dx), 0)
+#         i_max = min(int((xk + cut - X[0, 0]) / dx) + 1, Nx)
+#         j_min = max(int((yk - cut - Y[0, 0]) / dy), 0)
+#         j_max = min(int((yk + cut - Y[0, 0]) / dy) + 1, Ny)
+        
+#         X_local = X[j_min:j_max, i_min:i_max]
+#         Y_local = Y[j_min:j_max, i_min:i_max]
+        
+#         Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2)
+        
+#         mask = (Rk <= cut)
+#         R_safe = np.maximum(Rk, 1e-12)
+        
+#         n_dot_rhat = np.where(mask,
+#             (n_x[k] * (X_local - xk) + n_y[k] * (Y_local - yk)) / R_safe,
+#             0.0
+#         )
+        
+#         contribution = q[k] * n_dot_rhat * delta_r(R_safe) * mask
+#         Sq[j_min:j_max, i_min:i_max] += contribution
+    
+#     return Sq
+
 # Interpolation operator
-@jit(nopython=True)
-def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
+def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r):
     Jphi = np.zeros_like(xq)
+
     dx_loc = X[0, 1] - X[0, 0]
     dy_loc = Y[1, 0] - Y[0, 0]
-    Ny, Nx = X.shape
 
-    for k in range(len(xq)):
-        xk, yk = xq[k], yq[k]
-        nxk, nyk = n_x[k], n_y[k]
+    Nq = len(xq)
 
-        # Find the grid region affected by this point
-        i_min = max(int((xk - cut - X[0,0]) / dx_loc), 0)
-        i_max = min(int((xk + cut - X[0,0]) / dx_loc) + 1, Nx)
-        j_min = max(int((yk - cut - Y[0,0]) / dy_loc), 0)
-        j_max = min(int((yk + cut - Y[0,0]) / dy_loc) + 1, Ny)
+    for k in range(Nq):
+        dx = X - xq[k]
+        dy = Y - yq[k]
+        R = np.sqrt(dx*dx + dy*dy)
 
-        # Extract local patch
-        X_local = X[j_min:j_max, i_min:i_max]
-        Y_local = Y[j_min:j_max, i_min:i_max]
-        Phi_local = Phi[j_min:j_max, i_min:i_max]
+        mask = R > 0.0
 
-        dx = X_local - xk
-        dy = Y_local - yk
-        R = np.sqrt(dx**2 + dy**2)
-        mask = R <= cut
+        n_dot_rhat = np.zeros_like(R)
+        n_dot_rhat[mask] = (n_x[k]*dx[mask] + n_y[k]*dy[mask]) / R[mask]
 
-        n_dot_rhat = np.where(mask, (nxk * dx + nyk * dy) / R, 0.0)
-
-        delta_vals = delta_r(R)
-        contribution = Phi_local * n_dot_rhat * delta_vals * mask
-
-        Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+        Jphi[k] = dx_loc * dy_loc * np.sum(
+            Phi * n_dot_rhat * delta_r(R)
+        )
 
     return Jphi
+
+
+# @jit(nopython=True)
+# def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
+#     Jphi = np.zeros_like(xq)
+#     dx_loc = X[0, 1] - X[0, 0]
+#     dy_loc = Y[1, 0] - Y[0, 0]
+#     Ny, Nx = X.shape
+
+#     for k in range(len(xq)):
+#         xk, yk = xq[k], yq[k]
+#         nxk, nyk = n_x[k], n_y[k]
+
+#         # Find the grid region affected by this point
+#         i_min = max(int((xk - cut - X[0,0]) / dx_loc), 0)
+#         i_max = min(int((xk + cut - X[0,0]) / dx_loc) + 1, Nx)
+#         j_min = max(int((yk - cut - Y[0,0]) / dy_loc), 0)
+#         j_max = min(int((yk + cut - Y[0,0]) / dy_loc) + 1, Ny)
+
+#         # Extract local patch
+#         X_local = X[j_min:j_max, i_min:i_max]
+#         Y_local = Y[j_min:j_max, i_min:i_max]
+#         Phi_local = Phi[j_min:j_max, i_min:i_max]
+
+#         dx = X_local - xk
+#         dy = Y_local - yk
+#         R = np.sqrt(dx**2 + dy**2)
+#         mask = R <= cut
+#         R_safe = np.maximum(R, 1e-12)
+#         n_dot_rhat = (nxk*dx + nyk*dy) / R_safe
+
+#         #n_dot_rhat = np.where(mask, (nxk * dx + nyk * dy) / R, 0.0)
+
+#         delta_vals = delta_r(R)
+#         contribution = Phi_local * n_dot_rhat * delta_vals * mask
+
+#         Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+
+#     return Jphi
 
 # @jit(nopython=True)
 # def spreadQ(X, Y, xq, yq, q, delta, cut):
@@ -362,39 +409,59 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
     
 #     return Sq
 
-@jit(nopython=True)
-def interpPhi(X, Y, xq, yq, Phi, delta, cut):
+def interpPhi(X, Y, xq, yq, Phi, delta):
     Jphi = np.zeros_like(xq)
-    Nx = len(X)
-    Ny = len(Y)
+
     dx_loc = X[0, 1] - X[0, 0]
     dy_loc = Y[1, 0] - Y[0, 0]
-    
-    for k in range(len(xq)):
-        xk, yk = xq[k], yq[k]
 
-        # Find the grid region affected by this point
-        i_min = max(int((xk - cut - X[0,0]) / dx_loc), 0)
-        i_max = min(int((xk + cut - X[0,0]) / dx_loc) + 1, Nx)
-        j_min = max(int((yk - cut - Y[0,0]) / dy_loc), 0)
-        j_max = min(int((yk + cut - Y[0,0]) / dy_loc) + 1, Ny)
+    Nq = len(xq)
 
-        # Extract local patch
-        X_local = X[j_min:j_max, i_min:i_max]
-        Y_local = Y[j_min:j_max, i_min:i_max]
-        Phi_local = Phi[j_min:j_max, i_min:i_max]
+    for k in range(Nq):
+        dx = X - xq[k]
+        dy = Y - yq[k]
+        R = np.sqrt(dx*dx + dy*dy)
 
-        dx = X_local - xk
-        dy = Y_local - yk
-        R = np.sqrt(dx**2 + dy**2)
-        mask = R <= cut
-
-        delta_vals = delta(R)
-        contribution = Phi_local * delta_vals * mask
-
-        Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+        Jphi[k] = dx_loc * dy_loc * np.sum(
+            Phi * delta(R)
+        )
 
     return Jphi
+
+
+# @jit(nopython=True)
+# def interpPhi(X, Y, xq, yq, Phi, delta, cut):
+#     Jphi = np.zeros_like(xq)
+#     Nx = len(X)
+#     Ny = len(Y)
+#     dx_loc = X[0, 1] - X[0, 0]
+#     dy_loc = Y[1, 0] - Y[0, 0]
+    
+#     for k in range(len(xq)):
+#         xk, yk = xq[k], yq[k]
+
+#         # Find the grid region affected by this point
+#         i_min = max(int((xk - cut - X[0,0]) / dx_loc), 0)
+#         i_max = min(int((xk + cut - X[0,0]) / dx_loc) + 1, Nx)
+#         j_min = max(int((yk - cut - Y[0,0]) / dy_loc), 0)
+#         j_max = min(int((yk + cut - Y[0,0]) / dy_loc) + 1, Ny)
+
+#         # Extract local patch
+#         X_local = X[j_min:j_max, i_min:i_max]
+#         Y_local = Y[j_min:j_max, i_min:i_max]
+#         Phi_local = Phi[j_min:j_max, i_min:i_max]
+
+#         dx = X_local - xk
+#         dy = Y_local - yk
+#         R = np.sqrt(dx**2 + dy**2)
+#         mask = R <= cut
+
+#         delta_vals = delta(R)
+#         contribution = Phi_local * delta_vals * mask
+
+#         Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+
+#     return Jphi
 
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
