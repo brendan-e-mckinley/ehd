@@ -12,10 +12,10 @@
 namespace py = pybind11;
 using namespace amrex;
 
-// Helper: require 2D arrays for this skeleton
-static void check_2d_array(const py::array_t<double>& arr) {
-    if (arr.ndim() != 2) {
-        throw std::runtime_error("Only 2D arrays supported in this skeleton.");
+// Helper: require 3D arrays for this version
+static void check_3d_array(const py::array_t<double>& arr) {
+    if (arr.ndim() != 3) {
+        throw std::runtime_error("Only 3D arrays supported in this version.");
     }
 }
 
@@ -45,27 +45,30 @@ py::object amrex_finalize() {
 py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
                                   double x_lo = 0.0, double x_hi = 2.0*M_PI,
                                   double y_lo = 0.0, double y_hi = 2.0*M_PI,
+                                  double z_lo = 0.0, double z_hi = 2.0*M_PI,
                                   double tol = 1e-10,
                                   int nghost = 1,
                                   bool fortran_order_rhs = false)
 {
-    check_2d_array(rhs_in);
+    check_3d_array(rhs_in);
     py::buffer_info buf = rhs_in.request();
 
-    int nx = static_cast<int>(buf.shape[1]); // shape = (ny, nx) if Fortran? We'll treat shape[0]=ny, shape[1]=nx
-    int ny = static_cast<int>(buf.shape[0]);
+    // Assuming shape is (nz, ny, nx) for C-order: [k, j, i]
+    int nx = static_cast<int>(buf.shape[2]);
+    int ny = static_cast<int>(buf.shape[1]);
+    int nz = static_cast<int>(buf.shape[0]);
 
     // Create output numpy array for phi with same shape and layout as input (C order)
-    py::array_t<double> phi_out({ny, nx});
+    py::array_t<double> phi_out({nz, ny, nx});
     auto phi_buf = phi_out.request();
 
     // Build AMReX geometry
-    IntVect dom_lo(0,0);
-    IntVect dom_hi(nx-1, ny-1);
+    IntVect dom_lo(0, 0, 0);
+    IntVect dom_hi(nx-1, ny-1, nz-1);
     Box domain(dom_lo, dom_hi);
 
-    RealBox real_box({AMREX_D_DECL(x_lo, y_lo, 0.0)},
-                     {AMREX_D_DECL(x_hi, y_hi, 0.0)});
+    RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
+                     {AMREX_D_DECL(x_hi, y_hi, z_hi)});
     int coord = 0;
     Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
 
@@ -86,21 +89,27 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
 
     // Copy Python RHS -> mf_rhs
     // Support both C-order (row-major) and Fortran-order ravel: user sets fortran_order_rhs flag
-    // We assume python array layout is (ny, nx) with indexes [j,i] => [row, col]
+    // We assume python array layout is (nz, ny, nx) with indexes [k,j,i] => [dim0, dim1, dim2]
     for (MFIter mfi(mf_rhs); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
         auto arr = mf_rhs.array(mfi);
-        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
-            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-                // map (i,j) -> python index (row=j, col=i)
-                // C-contiguous numpy: data[row*nx + col]
-                // Fortran-order flattening: data[col*ny + row]
-                if (!fortran_order_rhs) {
-                    size_t idx = static_cast<size_t>(j)*nx + static_cast<size_t>(i);
-                    arr(i,j,0) = *(((double*)buf.ptr) + idx);
-                } else {
-                    size_t idx = static_cast<size_t>(i)*ny + static_cast<size_t>(j);
-                    arr(i,j,0) = *(((double*)buf.ptr) + idx);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    // map (i,j,k) -> python index (dim0=k, dim1=j, dim2=i)
+                    // C-contiguous numpy: data[k*ny*nx + j*nx + i]
+                    // Fortran-order flattening: data[i*ny*nz + j*nz + k]
+                    if (!fortran_order_rhs) {
+                        size_t idx = static_cast<size_t>(k)*ny*nx + 
+                                    static_cast<size_t>(j)*nx + 
+                                    static_cast<size_t>(i);
+                        arr(i,j,k) = *(((double*)buf.ptr) + idx);
+                    } else {
+                        size_t idx = static_cast<size_t>(i)*ny*nz + 
+                                    static_cast<size_t>(j)*nz + 
+                                    static_cast<size_t>(k);
+                        arr(i,j,k) = *(((double*)buf.ptr) + idx);
+                    }
                 }
             }
         }
@@ -118,8 +127,12 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
     dmVec[0] = dm;
 
     MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
-    mlpoisson.setDomainBC({AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)},
-                          {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)});
+    mlpoisson.setDomainBC({AMREX_D_DECL(LinOpBCType::Dirichlet, 
+                                        LinOpBCType::Dirichlet, 
+                                        LinOpBCType::Dirichlet)},
+                          {AMREX_D_DECL(LinOpBCType::Dirichlet, 
+                                        LinOpBCType::Dirichlet, 
+                                        LinOpBCType::Dirichlet)});
 
     mlpoisson.setLevelBC(0, nullptr);
 
@@ -135,10 +148,14 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
     for (MFIter mfi(mf_phi); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
         auto arr = mf_phi.const_array(mfi);
-        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
-            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-                size_t idx = static_cast<size_t>(j)*nx + static_cast<size_t>(i);
-                *(((double*)phi_buf.ptr) + idx) = arr(i,j,0);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    size_t idx = static_cast<size_t>(k)*ny*nx + 
+                                static_cast<size_t>(j)*nx + 
+                                static_cast<size_t>(i);
+                    *(((double*)phi_buf.ptr) + idx) = arr(i,j,k);
+                }
             }
         }
     }
@@ -147,7 +164,7 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
 }
 
 PYBIND11_MODULE(amrex_poisson, m) {
-    m.doc() = "Minimal AMReX Poisson wrapper (skeleton)";
+    m.doc() = "Minimal AMReX Poisson wrapper for 3D (skeleton)";
 
     m.def("amrex_init", &amrex_init, "Initialize AMReX (optionally pass argv list)");
     m.def("amrex_finalize", &amrex_finalize, "Finalize AMReX");
@@ -157,6 +174,8 @@ PYBIND11_MODULE(amrex_poisson, m) {
           py::arg("x_hi") = 2.0*M_PI,
           py::arg("y_lo") = 0.0,
           py::arg("y_hi") = 2.0*M_PI,
+          py::arg("z_lo") = 0.0,
+          py::arg("z_hi") = 2.0*M_PI,
           py::arg("tol") = 1e-10,
           py::arg("nghost") = 1,
           py::arg("fortran_order_rhs") = false);
