@@ -10,7 +10,7 @@ from scipy.sparse.linalg import splu, eigs, spsolve, gmres, LinearOperator
 from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
-import CPEO_utils as cpeo
+import CPEO_utils_dynamic as cpeo
 import stokes_solver_utils_fast as stokes
 
 ###########################
@@ -35,6 +35,10 @@ cut = 6 * 1.2 * dx # cutoff value
 # Anderson acceleration parameters
 beta = 0.2
 m = 50
+
+# time parameters
+N_t = 100
+dt = 0.01
 
 ##########################
 ######  GRID SETUP  ######
@@ -246,6 +250,10 @@ Phi = ctxt[:Ny*Nx].reshape((Ny, Nx), order='F')
 Np = ctxt[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
 Nm = ctxt[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
 
+## Start ion concentrations at equilibrium
+Np_prev = np.ones(Ny*Nx)
+Nm_prev = np.ones(Ny*Nx)
+
 ## Boundary conditions for Nu = F system
 f_bc_mat = np.zeros((Ny + 1, Nx))
 g_bc_mat = np.zeros((Ny, Nx + 1))
@@ -285,11 +293,11 @@ def Jop_prime(P):
 def G_d_G(Phi, N_pm):
     return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
-def b_Op_Schur(ctxt, U_fluid, V_fluid):
-    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+def b_Op_Schur(ctxt, N_p_prev, N_m_prev, U_fluid, V_fluid):
+    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, N_p_prev, N_m_prev, U_fluid, V_fluid, Lap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt)
 
-def b_Op(ctxt, U_fluid, V_fluid):
-    return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+def b_Op(ctxt, N_p_prev, N_m_prev, U_fluid, V_fluid):
+    return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, N_p_prev, N_m_prev, U_fluid, V_fluid, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt)
 
 def AxOp(ctxt):
     return cpeo.Constrained_Lap(ctxt, ctxt, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
@@ -301,7 +309,7 @@ delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
 ##########################
 
 ## Initialize variables for Rphi = rho solve
-schurRHS = b_Op_Schur(ctxt, U_fluid, V_fluid)
+schurRHS = b_Op_Schur(ctxt, Np_prev, Nm_prev, U_fluid, V_fluid)
 DU = np.full((len(schurRHS), m), np.nan)
 DG = np.full((len(schurRHS), m), np.nan)
 
@@ -310,7 +318,7 @@ p_guess = u_n[3*Nx*Ny:]
 
 # Build dense Schur matrix
 schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
-schurRHS = b_Op_Schur(ctxt, U_fluid, V_fluid)
+schurRHS = b_Op_Schur(ctxt, Np_prev, Nm_prev, U_fluid, V_fluid)
 computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
 schurDense = np.zeros((Nib * 3, Nib * 3))
 for col in range(Nib * 3): 
@@ -418,157 +426,256 @@ pr.enable()
 ##################################
 #######  FULL SYSTEM LOOP  #######
 ##################################
-for its in range(100000):
-    #######################################
-    #####  solve R*phi = Rho(u, phi)  #####
-    #######################################
 
-    schurRHS = b_Op_Schur(ctxt, U_fluid, V_fluid)
-    computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
+for t_step in range(N_t):
+    ##################################
+    #######  single time step  #######
+    ##################################
+    for its in range(100000):
+        #######################################
+        #####  solve R*phi = Rho(u, phi)  #####
+        #######################################
 
-    # Use SVD to solve
-    p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-    G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
-
-    u_next = G_u_n.copy()
-    G_u_next = G_u_n.copy()
-    err = []
-
-    # Anderson acceleration loop
-    for inner_its in range(100000):
-        schurRHS = b_Op_Schur(u_next, U_fluid, V_fluid)
+        schurRHS = b_Op_Schur(ctxt, Np_prev, Nm_prev, U_fluid, V_fluid)
         computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
-        
+
         # Use SVD to solve
-        p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-        G_u_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
+        p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
+        G_u_n = cpeo.post_processing_compute_R(dLap, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
-        m_n = min(m, inner_its + 1)
-        
-        # Store differences
-        if inner_its < m:
-            DU[:, inner_its] = u_next - u_n
-            DG[:, inner_its] = G_u_next - G_u_n
-        else:
-            DU = np.roll(DU, -1, axis=1)
-            DG = np.roll(DG, -1, axis=1)
-            DU[:, -1] = u_next - u_n
-            DG[:, -1] = G_u_next - G_u_n
-        
-        f_n = G_u_next - u_next
-        DF = DG[:, :m_n] - DU[:, :m_n]
-        
-        # QR decomposition
-        gamma, residuals, rank, s = lstsq(DF, f_n)
-        
-        u_n = u_next.copy()
-        G_u_n = G_u_next.copy()
-        
-        u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
-        
-        # Extract solution components
-        Phi = u_next[:Ny*Nx].reshape((Ny, Nx), order='F')
-        Np = u_next[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
-        Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
-        p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
-        p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
-        p_m = u_next[3*Nx*Ny+2*Nib:]
+        u_next = G_u_n.copy()
+        G_u_next = G_u_n.copy()
+        err = []
 
-        p_next = u_next[3*Nx*Ny:]
+        # Anderson acceleration loop
+        for inner_its in range(100000):
+            schurRHS = b_Op_Schur(u_next, Np_prev, Nm_prev, U_fluid, V_fluid)
+            computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
+            
+            # Use SVD to solve
+            p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
+            G_u_next = cpeo.post_processing_compute_R(dLap, p_n, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
+
+            m_n = min(m, inner_its + 1)
+            
+            # Store differences
+            if inner_its < m:
+                DU[:, inner_its] = u_next - u_n
+                DG[:, inner_its] = G_u_next - G_u_n
+            else:
+                DU = np.roll(DU, -1, axis=1)
+                DG = np.roll(DG, -1, axis=1)
+                DU[:, -1] = u_next - u_n
+                DG[:, -1] = G_u_next - G_u_n
+            
+            f_n = G_u_next - u_next
+            DF = DG[:, :m_n] - DU[:, :m_n]
+            
+            # QR decomposition
+            gamma, residuals, rank, s = lstsq(DF, f_n)
+            
+            u_n = u_next.copy()
+            G_u_n = G_u_next.copy()
+            
+            u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
+            
+            # Extract solution components
+            Phi = u_next[:Ny*Nx].reshape((Ny, Nx), order='F')
+            Np = u_next[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
+            Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
+            p = u_next[3*Nx*Ny:3*Nx*Ny+Nib]
+            p_p = u_next[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib]
+            p_m = u_next[3*Nx*Ny+2*Nib:]
+
+            p_next = u_next[3*Nx*Ny:]
+            
+            # Check convergence
+            res1, res2, res3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
+            schur_next = np.concatenate([res1, res2, res3])
+            err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
+            
+            err.append(err_curr)
+            
+            print(f'Iteration {inner_its}: residual = {err_curr}')
+            
+            if err_curr < 1e-4:
+                print('Rphi = rho Converged!')
+                break
         
-        # Check convergence
-        res1, res2, res3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
-        schur_next = np.concatenate([res1, res2, res3])
-        err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
+        ctxt = u_next.copy()
         
-        err.append(err_curr)
-        
-        print(f'Iteration {inner_its}: residual = {err_curr}')
-        
-        if err_curr < 1e-4:
-            print('Rphi = rho Converged!')
+        # compute body forces 
+        Phi_full = np.zeros((Ny+2, Nx+2))
+        Np_full = np.ones((Ny+2, Nx+2))
+        Nm_full = np.ones((Ny+2, Nx+2))
+
+        Phi_full[1:-1, 1:-1] = Phi
+        Phi_full[1:-1, 0] = Phi[:, -1]
+        Phi_full[1:-1, -1] = Phi[:, -1]
+        Phi_full[0, 1:-1] = -25
+        Phi_full[-1, 1:-1] = 25
+        Np_full[1:-1, 1:-1] = Np
+        Nm_full[1:-1, 1:-1] = Nm
+
+        Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
+        Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
+
+        Np_relevant_y = Np_full[1:-1,:]
+        Nm_relevant_y = Nm_full[1:-1,:]
+        Np_relevant_x = Np_full[:,1:-1]
+        Nm_relevant_x = Nm_full[:,1:-1]
+
+        bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
+        bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+
+        body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
+        body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
+        body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
+        body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
+
+        ################################
+        #####  solve N*u = F(phi)  #####
+        ################################
+
+        # RHS
+        f = body_interpolated_x.ravel(order='F')
+        g = body_interpolated_y.ravel(order='F')
+
+        f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
+        g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
+
+        U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+        #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+
+        Uplot = U.reshape((Ny + 1, Nx), order='F')
+        Vplot = V.reshape((Ny, Nx + 1), order='F')
+        Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
+
+        U_interpolated = np.zeros([Ny, Nx])
+        V_interpolated = np.zeros([Ny, Nx])
+        for col_index in range(Uplot.shape[1]):
+            col = Uplot[:, col_index]
+            for row_index in range(len(col) - 1):
+                midpoint = (col[row_index] + col[row_index+1]) / 2
+                U_interpolated[row_index, col_index] = midpoint
+
+        for row_index in range(Vplot.shape[0]):
+            row = Vplot[row_index, :]
+            for col_index in range(len(row) - 1):
+                midpoint = (row[col_index] + row[col_index+1]) / 2
+                V_interpolated[row_index, col_index] = midpoint
+
+        UFull = np.zeros((Ny + 2, Nx + 2))
+        UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
+
+        VFull = np.zeros((Ny + 2, Nx + 2))
+        VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
+
+        U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+        V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+
+        residual_check_RHS = b_Op(u_next, Np_prev, Nm_prev, U_fluid, V_fluid)
+        residual_check_AxOp = AxOp(u_next)
+        residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
+        print(f'New residual Rphi = {residual_check}')
+
+        if residual_check < 1e-4:
+            print('Full system converged!')
             break
-    
-    ctxt = u_next.copy()
-    
-    # compute body forces 
-    Phi_full = np.zeros((Ny+2, Nx+2))
-    Np_full = np.ones((Ny+2, Nx+2))
-    Nm_full = np.ones((Ny+2, Nx+2))
 
-    Phi_full[1:-1, 1:-1] = Phi
-    Phi_full[1:-1, 0] = Phi[:, -1]
-    Phi_full[1:-1, -1] = Phi[:, -1]
-    Phi_full[0, 1:-1] = -25
-    Phi_full[-1, 1:-1] = 25
-    Np_full[1:-1, 1:-1] = Np
-    Nm_full[1:-1, 1:-1] = Nm
+        # update Np_prev and Nm_prev
+        Np_prev = Np.ravel(order='F')
+        Nm_prev = Nm.ravel(order='F')
 
-    Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
-    Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
+    # ------------------------------------------------------
+    # Plot N_p
+    # ------------------------------------------------------
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection='3d')
 
-    Np_relevant_y = Np_full[1:-1,:]
-    Nm_relevant_y = Nm_full[1:-1,:]
-    Np_relevant_x = Np_full[:,1:-1]
-    Nm_relevant_x = Nm_full[:,1:-1]
+    surf = ax.plot_surface(
+        Xint, Yint, Np,
+        cmap='coolwarm',
+        edgecolor='none',
+        linewidth=0,
+        vmin=0.6,  # Fixed minimum
+        vmax=1.4   # Fixed maximum
+    )
 
-    bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-    bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+    # Add beige circle patch at origin
+    theta = np.linspace(0, 2*np.pi, 100)
+    radius = 0.25
+    x_circle = radius * np.cos(theta)
+    y_circle = radius * np.sin(theta)
+    z_circle = np.full_like(x_circle, 10)  # High z-value to cover the surface
 
-    body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
-    body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
-    body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
-    body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
+    ax.plot(x_circle, y_circle, z_circle, color='beige', linewidth=2)
+    ax.plot_trisurf(x_circle, y_circle, z_circle, color='beige', alpha=1.0, shade=False)
 
-    ################################
-    #####  solve N*u = F(phi)  #####
-    ################################
+    fig.colorbar(surf, shrink=0.5, aspect=5)
 
-    # RHS
-    f = body_interpolated_x.ravel(order='F')
-    g = body_interpolated_y.ravel(order='F')
+    # Top-down view
+    ax.view_init(elev=90, azim=-90)
 
-    f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
-    g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
+    # Clean up 3D clutter
+    ax.set_zticks([])
+    ax.set_zlabel('')
 
-    U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
-    #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+    # Labels
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.set_title('Top-Down View of N_p')
+    ax.grid(False)
 
-    Uplot = U.reshape((Ny + 1, Nx), order='F')
-    Vplot = V.reshape((Ny, Nx + 1), order='F')
-    Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
+    plt.xlim(-2, 2)
+    plt.ylim(-2, 2)
+    plt.savefig('img/n_p/n_p_' + str(t_step) + '.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
-    U_interpolated = np.zeros([Ny, Nx])
-    V_interpolated = np.zeros([Ny, Nx])
-    for col_index in range(Uplot.shape[1]):
-        col = Uplot[:, col_index]
-        for row_index in range(len(col) - 1):
-            midpoint = (col[row_index] + col[row_index+1]) / 2
-            U_interpolated[row_index, col_index] = midpoint
+    # ------------------------------------------------------
+    # Plot N_m
+    # ------------------------------------------------------
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection='3d')
 
-    for row_index in range(Vplot.shape[0]):
-        row = Vplot[row_index, :]
-        for col_index in range(len(row) - 1):
-            midpoint = (row[col_index] + row[col_index+1]) / 2
-            V_interpolated[row_index, col_index] = midpoint
+    surf = ax.plot_surface(
+        Xint, Yint, Nm,
+        cmap='coolwarm',
+        edgecolor='none',
+        linewidth=0,
+        vmin=0.6,  # Fixed minimum
+        vmax=1.4   # Fixed maximum
+    )
 
-    UFull = np.zeros((Ny + 2, Nx + 2))
-    UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
+    # Add beige circle patch at origin
+    theta = np.linspace(0, 2*np.pi, 100)
+    radius = 0.25
+    x_circle = radius * np.cos(theta)
+    y_circle = radius * np.sin(theta)
+    z_circle = np.full_like(x_circle, 10)  # High z-value to cover the surface
 
-    VFull = np.zeros((Ny + 2, Nx + 2))
-    VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
+    ax.plot(x_circle, y_circle, z_circle, color='beige', linewidth=2)
+    ax.plot_trisurf(x_circle, y_circle, z_circle, color='beige', alpha=1.0, shade=False)
 
-    U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
-    V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+    fig.colorbar(surf, shrink=0.5, aspect=5)
 
-    residual_check_RHS = b_Op(u_next, U_fluid, V_fluid)
-    residual_check_AxOp = AxOp(u_next)
-    residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
-    print(f'New residual Rphi = {residual_check}')
+    # Top-down view
+    ax.view_init(elev=90, azim=-90)
 
-    if residual_check < 1e-4:
-        print('Full system converged!')
-        break
+    # Clean up 3D clutter
+    ax.set_zticks([])
+    ax.set_zlabel('')
+
+    # Labels
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.set_title('Top-Down View of N_m')
+    ax.grid(False)
+
+    plt.xlim(-2, 2)
+    plt.ylim(-2, 2)
+    plt.savefig('img/n_m/n_m_' + str(t_step) + '.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 # check Nu residual 
 Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])

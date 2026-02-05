@@ -480,7 +480,7 @@ def apply_Ainv_R(dLap, target_vec, delta_layer):
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
-def Build_RHS_rho(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_rho(ctxt, ctxt_BCs, N_p_prev, N_m_prev, U, V, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -555,16 +555,19 @@ def Build_RHS_rho(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G, de
     adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
+    n_p_time_deriv = (alpha_p / dt) * (eye(sz) @ (N_p - N_p_prev))
+    n_m_time_deriv = (alpha_m / dt) * (eye(sz) @ (N_m - N_m_prev))
+
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p))
-    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m))
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p) + n_p_time_deriv)
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m) + n_m_time_deriv)
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
-def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_Schur_System(ctxt, ctxt_BCs, N_p_prev, N_m_prev, U, V, Lap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -639,9 +642,12 @@ def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, 
     adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
+    n_p_time_deriv = (alpha_p / dt) * (eye(sz) @ (N_p - N_p_prev))
+    n_m_time_deriv = (alpha_m / dt) * (eye(sz) @ (N_m - N_m_prev))
+
     b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p)
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m)
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p) + n_p_time_deriv
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m) + n_m_time_deriv
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
