@@ -163,20 +163,22 @@ py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
     return phi_out;
 }
 
-PYBIND11_MODULE(amrex_poisson, m) {
+PYBIND11_MODULE(amrex_poisson_3d, m) {
     m.doc() = "Minimal AMReX Poisson wrapper for 3D (skeleton)";
 
-    m.def("amrex_init", &amrex_init, "Initialize AMReX (optionally pass argv list)");
+    m.def("amrex_init", &amrex_init, 
+        py::arg("argv") = py::list(),
+        "Initialize AMReX (optionally pass argv list)");
     m.def("amrex_finalize", &amrex_finalize, "Finalize AMReX");
     m.def("solve_poisson", &solve_poisson,
-          py::arg("rhs_in"),
-          py::arg("x_lo") = 0.0,
-          py::arg("x_hi") = 2.0*M_PI,
-          py::arg("y_lo") = 0.0,
-          py::arg("y_hi") = 2.0*M_PI,
-          py::arg("z_lo") = 0.0,
-          py::arg("z_hi") = 2.0*M_PI,
-          py::arg("tol") = 1e-10,
-          py::arg("nghost") = 1,
-          py::arg("fortran_order_rhs") = false);
+        py::arg("rhs_in"),
+        py::arg("x_lo") = 0.0,
+        py::arg("x_hi") = 2.0*M_PI,
+        py::arg("y_lo") = 0.0,
+        py::arg("y_hi") = 2.0*M_PI,
+        py::arg("z_lo") = 0.0,
+        py::arg("z_hi") = 2.0*M_PI,
+        py::arg("tol") = 1e-10,
+        py::arg("nghost") = 1,
+        py::arg("fortran_order_rhs") = false);
 }
