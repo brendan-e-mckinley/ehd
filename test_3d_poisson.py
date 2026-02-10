@@ -10,28 +10,31 @@ def test_poisson_3d():
     amrex_poisson_3d.amrex_init([])
     
     try:
-        # Grid parameters
-        nx, ny, nz = 64, 64, 64
-        x_lo, x_hi = 0.0, 2.0 * np.pi
-        y_lo, y_hi = 0.0, 2.0 * np.pi
-        z_lo, z_hi = 0.0, 2.0 * np.pi
+        # Grid parameters - use domain [0, π] instead of [0, 2π]
+        nx, ny, nz = 450, 450, 450
+        x_lo, x_hi = 0.0, 2 * np.pi
+        y_lo, y_hi = 0.0, 2 * np.pi
+        z_lo, z_hi = 0.0, 2 * np.pi
         
-        # Create coordinate arrays
-        x = np.linspace(x_lo, x_hi, nx, endpoint=False)
-        y = np.linspace(y_lo, y_hi, ny, endpoint=False)
-        z = np.linspace(z_lo, z_hi, nz, endpoint=False)
+        # Create coordinate arrays - include endpoints for Dirichlet BCs
+        x = np.linspace(x_lo, x_hi, nx)
+        y = np.linspace(y_lo, y_hi, ny)
+        z = np.linspace(z_lo, z_hi, nz)
         
         # Create 3D meshgrid
         X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
         
         # Analytical solution: phi = sin(x) * sin(y) * sin(z)
+        # This satisfies phi = 0 at all boundaries
         phi_exact = np.sin(X) * np.sin(Y) * np.sin(Z)
         
-        # RHS from Laplacian: ∇²phi = -3*sin(x)*sin(y)*sin(z)
-        # Note: AMReX solves -∇²phi = rhs, so we need rhs = 3*sin(x)*sin(y)*sin(z)
-        rhs = 3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)
+        # For -∇²phi = rhs, we have:
+        # -∇²[sin(x)sin(y)sin(z)] = -[-sin(x)sin(y)sin(z) - sin(x)sin(y)sin(z) - sin(x)sin(y)sin(z)]
+        #                         = 3*sin(x)*sin(y)*sin(z)
+        rhs = -3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)
         
         print(f"Grid size: {nx} x {ny} x {nz}")
+        print(f"Domain: [{x_lo}, {x_hi}] x [{y_lo}, {y_hi}] x [{z_lo}, {z_hi}]")
         print(f"RHS shape: {rhs.shape}")
         print(f"RHS min/max: {rhs.min():.6f} / {rhs.max():.6f}")
         
@@ -44,7 +47,7 @@ def test_poisson_3d():
             tol=1e-10,
             nghost=1
         )
-        
+            
         print(f"Solution shape: {phi_numerical.shape}")
         print(f"Solution min/max: {phi_numerical.min():.6f} / {phi_numerical.max():.6f}")
         
