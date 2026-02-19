@@ -9,8 +9,16 @@
 #include <AMReX_Array.H>
 #include <AMReX_ParallelDescriptor.H>
 
+#include <AMReX_TagBox.H>
+#include <AMReX_FillPatchUtil.H>   // for InterpFromCoarseLevel
+#include <AMReX_Interpolater.H>
+
 namespace py = pybind11;
 using namespace amrex;
+
+auto rhs_function = [](Real x, Real y, Real z) -> Real {
+    return -3.0 * std::sin(x) * std::sin(y) * std::sin(z);
+};
 
 // Helper: require 3D arrays for this version
 static void check_3d_array(const py::array_t<double>& arr) {
@@ -42,6 +50,64 @@ py::object amrex_finalize() {
     return py::none();
 }
 
+BoxArray make_refined_ba(const Geometry& coarse_geom, const Box& coarse_domain,
+    const Real sphere_center[3], Real sphere_radius,
+    int max_grid_size = 16)
+{
+    IntVect ref_ratio(AMREX_D_DECL(2,2,2));
+
+    BoxArray coarse_ba(coarse_domain);
+    coarse_ba.maxSize(max_grid_size);
+    DistributionMapping coarse_dm(coarse_ba);
+
+    const Real* dx      = coarse_geom.CellSize();
+    const Real* prob_lo = coarse_geom.ProbLo();
+
+    // Build a mask: 1 where we want refinement, 0 elsewhere
+    iMultiFab mask(coarse_ba, coarse_dm, 1, 0);
+    mask.setVal(0);
+
+    for (MFIter mfi(mask); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mask.array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            Real x = prob_lo[0] + (i + 0.5) * dx[0];
+            Real y = prob_lo[1] + (j + 0.5) * dx[1];
+            Real z = prob_lo[2] + (k + 0.5) * dx[2];
+            Real d2 = (x-sphere_center[0])*(x-sphere_center[0])
+                    + (y-sphere_center[1])*(y-sphere_center[1])
+                    + (z-sphere_center[2])*(z-sphere_center[2]);
+            if (d2 < sphere_radius * sphere_radius)
+                arr(i,j,k) = 1;
+        }
+    }
+
+    // Collect tagged coarse boxes into a BoxList, then refine to fine index space
+    BoxList bl;
+    for (MFIter mfi(mask); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mask.const_array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            if (arr(i,j,k) == 1) {
+                // Add this single coarse cell as a box, then refine it
+                Box coarse_cell(IntVect(i,j,k), IntVect(i,j,k));
+                bl.push_back(coarse_cell.refine(ref_ratio));
+            }
+        }
+    }
+
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(!bl.isEmpty(),
+        "Refined BoxList is empty — sphere may not overlap domain");
+
+    bl.simplify();           // merge adjacent boxes where possible
+    bl.maxSize(max_grid_size);
+    return BoxArray(bl);
+}
+
 py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
     double x_lo = 0.0, double x_hi = 2.0*M_PI,
     double y_lo = 0.0, double y_hi = 2.0*M_PI,
@@ -50,117 +116,148 @@ py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
     int nghost = 1,
     bool fortran_order_rhs = false)
 {
-check_3d_array(rhs_in);
-py::buffer_info buf = rhs_in.request();
+    check_3d_array(rhs_in);
+    py::buffer_info buf = rhs_in.request();
 
-// Assuming shape is (nz, ny, nx) for C-order: [k, j, i]
-int nx = static_cast<int>(buf.shape[2]);
-int ny = static_cast<int>(buf.shape[1]);
-int nz = static_cast<int>(buf.shape[0]);
+    // Assuming shape is (nz, ny, nx) for C-order: [k, j, i]
+    int nx = static_cast<int>(buf.shape[2]);
+    int ny = static_cast<int>(buf.shape[1]);
+    int nz = static_cast<int>(buf.shape[0]);
 
-// Create output numpy array for phi with same shape and layout as input (C order)
-py::array_t<double> phi_out({nz, ny, nx});
-auto phi_buf = phi_out.request();
+    // Create output numpy array for phi with same shape and layout as input (C order)
+    py::array_t<double> phi_out({nz, ny, nx});
+    auto phi_buf = phi_out.request();
 
-// Build AMReX geometry
-IntVect dom_lo(0, 0, 0);
-IntVect dom_hi(nx-1, ny-1, nz-1);
-Box domain(dom_lo, dom_hi);
+    // Build AMReX geometry
+    IntVect dom_lo(0, 0, 0);
+    IntVect dom_hi(nx-1, ny-1, nz-1);
+    Box domain(dom_lo, dom_hi);
 
-RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
-{AMREX_D_DECL(x_hi, y_hi, z_hi)});
-int coord = 0;
-Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
+    RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
+    {AMREX_D_DECL(x_hi, y_hi, z_hi)});
+    int coord = 0;
+    Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
 
-Geometry geom;
-geom.define(domain, real_box, coord, is_periodic);
+    Geometry geom;
+    geom.define(domain, real_box, coord, is_periodic);
 
-// Single-level BoxArray / DistributionMapping
-BoxArray ba(domain);
-ba.maxSize(32); // chunking
-DistributionMapping dm(ba);
+    // Single-level BoxArray / DistributionMapping
+    BoxArray ba(domain);
+    ba.maxSize(32); // chunking
+    DistributionMapping dm(ba);
 
-// MultiFabs
-int ncomp = 1;
-MultiFab mf_rhs(ba, dm, ncomp, 0);
-MultiFab mf_phi(ba, dm, ncomp, nghost);
+    // --- Coarse level (as before) ---
+    IntVect ref_ratio(AMREX_D_DECL(2,2,2));
+    int nlevs = 2;
 
-mf_phi.setVal(0.0);
+    Vector<Geometry>           geomVec(nlevs);
+    Vector<BoxArray>           baVec(nlevs);
+    Vector<DistributionMapping> dmVec(nlevs);
 
-// Copy Python RHS -> mf_rhs
-// Support both C-order (row-major) and Fortran-order ravel: user sets fortran_order_rhs flag
-// We assume python array layout is (nz, ny, nx) with indexes [k,j,i] => [dim0, dim1, dim2]
-for (MFIter mfi(mf_rhs); mfi.isValid(); ++mfi) {
-const Box& bx = mfi.validbox();
-auto arr = mf_rhs.array(mfi);
-for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
-for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
-for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-// map (i,j,k) -> python index (dim0=k, dim1=j, dim2=i)
-// C-contiguous numpy: data[k*ny*nx + j*nx + i]
-// Fortran-order flattening: data[i*ny*nz + j*nz + k]
-if (!fortran_order_rhs) {
-size_t idx = static_cast<size_t>(k)*ny*nx + 
-      static_cast<size_t>(j)*nx + 
-      static_cast<size_t>(i);
-arr(i,j,k) = *(((double*)buf.ptr) + idx);
-} else {
-size_t idx = static_cast<size_t>(i)*ny*nz + 
-      static_cast<size_t>(j)*nz + 
-      static_cast<size_t>(k);
-arr(i,j,k) = *(((double*)buf.ptr) + idx);
-}
-}
-}
-}
-}
+    // Level 0: coarse
+    geomVec[0] = geom;
+    baVec[0]   = ba;     // your existing coarse BoxArray
+    dmVec[0]   = dm;
 
-// Build solver operator and MLMG (single-level Poisson)
-LPInfo info;
-info.setMaxCoarseningLevel(0);
+    // Level 1: fine (sphere region only)
+    const Real sphere_center[3] = {
+        0.5*(x_lo+x_hi), 0.5*(y_lo+y_hi), 0.5*(z_lo+z_hi)
+    };
+    const Real sphere_radius = 0.25 * (x_hi - x_lo); // 25% of domain
 
-Vector<Geometry> geomVec(1);
-geomVec[0] = geom;
-Vector<BoxArray> baVec(1);
-baVec[0] = ba;
-Vector<DistributionMapping> dmVec(1);
-dmVec[0] = dm;
+    BoxArray  fine_ba = make_refined_ba(geom, domain, sphere_center,
+                                        sphere_radius, /*max_grid_size=*/16);
+    Geometry  fine_geom;
+    {
+        Box fine_domain(IntVect(0),
+                        IntVect(AMREX_D_DECL(2*nx-1, 2*ny-1, 2*nz-1)));
+        fine_geom.define(fine_domain, real_box, coord, is_periodic);
+    }
+    DistributionMapping fine_dm(fine_ba);
 
-MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
-mlpoisson.setDomainBC({AMREX_D_DECL(LinOpBCType::Dirichlet, 
-          LinOpBCType::Dirichlet, 
-          LinOpBCType::Dirichlet)},
-{AMREX_D_DECL(LinOpBCType::Dirichlet, 
-          LinOpBCType::Dirichlet, 
-          LinOpBCType::Dirichlet)});
+    geomVec[1] = fine_geom;
+    baVec[1]   = fine_ba;
+    dmVec[1]   = fine_dm;
 
-mlpoisson.setLevelBC(0, nullptr);
+    // --- MultiFabs for both levels ---
+    MultiFab mf_phi_0(baVec[0], dmVec[0], 1, nghost);
+    MultiFab mf_phi_1(baVec[1], dmVec[1], 1, nghost);
+    MultiFab mf_rhs_0(baVec[0], dmVec[0], 1, 0);
+    MultiFab mf_rhs_1(baVec[1], dmVec[1], 1, 0);
 
-MLMG mlmg(mlpoisson);
-mlmg.setVerbose(0);
+    mf_phi_0.setVal(0.0);
+    mf_phi_1.setVal(0.0);
 
-// Solve: mlmg solves A * phi = rhs for Laplacian operator as configured by MLPoisson.
-// Note: AMReX uses -div(a grad) form. If you need signs matched to your old code,
-// you may need to flip sign of rhs or postprocess.
-mlmg.solve({&mf_phi}, {&mf_rhs}, tol, tol);
+    for (MFIter mfi(mf_rhs_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_rhs_0.array(mfi);
+        const Real* dx      = geom.CellSize();
+        const Real* prob_lo = geom.ProbLo();
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            Real x = prob_lo[0] + (i + 0.5) * dx[0];
+            Real y = prob_lo[1] + (j + 0.5) * dx[1];
+            Real z = prob_lo[2] + (k + 0.5) * dx[2];
+            arr(i,j,k) = rhs_function(x, y, z);
+        }
+    }
 
-// Copy mf_phi -> phi_out (C-order)
-for (MFIter mfi(mf_phi); mfi.isValid(); ++mfi) {
-const Box& bx = mfi.validbox();
-auto arr = mf_phi.const_array(mfi);
-for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
-for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
-for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-size_t idx = static_cast<size_t>(k)*ny*nx + 
-  static_cast<size_t>(j)*nx + 
-  static_cast<size_t>(i);
-*(((double*)phi_buf.ptr) + idx) = arr(i,j,k);
-}
-}
-}
-}
+    mf_rhs_0.FillBoundary(geomVec[0].periodicity());
 
-return phi_out;
+    // Fill fine RHS directly instead of interpolating
+    for (MFIter mfi(mf_rhs_1); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_rhs_1.array(mfi);
+        const Real* dx_fine      = fine_geom.CellSize();
+        const Real* prob_lo_fine = fine_geom.ProbLo();
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            Real x = prob_lo_fine[0] + (i + 0.5) * dx_fine[0];
+            Real y = prob_lo_fine[1] + (j + 0.5) * dx_fine[1];
+            Real z = prob_lo_fine[2] + (k + 0.5) * dx_fine[2];
+            // Evaluate your RHS function at (x,y,z)
+            arr(i,j,k) = rhs_function(x, y, z);
+        }
+    }
+
+    // --- MLPoisson with 2 levels ---
+    LPInfo info;
+    // Allow coarsening now that we have multiple levels
+    MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
+
+    mlpoisson.setDomainBC(
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)},
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)});
+
+    mlpoisson.setLevelBC(0, nullptr);
+    mlpoisson.setLevelBC(1, nullptr);
+
+    MLMG mlmg(mlpoisson);
+    mlmg.setVerbose(0);
+    mlmg.solve({&mf_phi_0, &mf_phi_1}, {&mf_rhs_0, &mf_rhs_1}, tol, tol);
+
+    amrex::average_down(mf_phi_1, mf_phi_0, geomVec[1], geomVec[0],
+        0, 1, ref_ratio);
+
+    // Copy mf_phi -> phi_out (C-order)
+    for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_0.const_array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    size_t idx = static_cast<size_t>(k)*ny*nx + 
+                    static_cast<size_t>(j)*nx + 
+                    static_cast<size_t>(i);
+                    *(((double*)phi_buf.ptr) + idx) = arr(i,j,k);
+                }
+            }
+        }
+    }
+
+    return phi_out;
 }
 
 py::array_t<double> solve_poisson(py::array_t<double> rhs_in,
@@ -302,4 +399,16 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("tol") = 1e-10,
         py::arg("nghost") = 1,
         py::arg("fortran_order_rhs") = false);
+    m.def("solve_poisson_adaptive", &solve_poisson_adaptive,
+        py::arg("rhs_in"),
+        py::arg("x_lo") = 0.0,
+        py::arg("x_hi") = 2.0*M_PI,
+        py::arg("y_lo") = 0.0,
+        py::arg("y_hi") = 2.0*M_PI,
+        py::arg("z_lo") = 0.0,
+        py::arg("z_hi") = 2.0*M_PI,
+        py::arg("tol") = 1e-10,
+        py::arg("nghost") = 1,
+        py::arg("fortran_order_rhs") = false,
+        "Solve Poisson equation with AMR refinement around a sphere at the domain center");
 }
