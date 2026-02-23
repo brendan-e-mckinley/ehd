@@ -105,7 +105,7 @@ def test_poisson_3d_uniform_vs_amr():
     
     try:
         # Use moderate resolution for comparison
-        nx, ny, nz = 128, 128, 128
+        nx, ny, nz = 450, 450, 450
         x_lo, x_hi = 0.0, 2 * np.pi
         y_lo, y_hi = 0.0, 2 * np.pi
         z_lo, z_hi = 0.0, 2 * np.pi
@@ -139,7 +139,7 @@ def test_poisson_3d_uniform_vs_amr():
         print(f"   RMS error: {np.sqrt(np.mean(error_uniform**2)):.6e}")
         
         # Solve with AMR
-        print(f"\n2. AMR solver (coarse 32³, fine 128³ in center):")
+        print(f"\n2. AMR solver (coarse 32³, fine 450 in center):")
         phi_amr = amrex_poisson_3d.solve_poisson_adaptive(
             rhs,
             x_lo=x_lo, x_hi=x_hi,
@@ -161,7 +161,7 @@ def test_poisson_3d_uniform_vs_amr():
         print(f"   RMS difference: {np.sqrt(np.mean(diff**2)):.6e}")
         
         # Compare grid sizes
-        amr_cells = 32**3 + int(4/3 * np.pi * 0.3**3 * 128**3)
+        amr_cells = 32**3 + int(4/3 * np.pi * 0.3**3 * 450**3)
         uniform_cells = nx**3
         
         print(f"\n4. Grid efficiency:")
