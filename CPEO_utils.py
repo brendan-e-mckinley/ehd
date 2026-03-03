@@ -564,7 +564,7 @@ def Build_RHS_rho(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G, de
     
     return b_Ctx
 
-def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_rho_True(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -596,10 +596,99 @@ def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, 
     Phi_full[-1, :] = 25
     N_p_full[1:-1, 1:-1] = N_p_reshaped
     N_m_full[1:-1, 1:-1] = N_m_reshaped
-
+    
     dl2 = delta_layer**2
 
     computed_lap = (-Lap) @ Phi
+    computed_lap = computed_lap + Phi_BC
+    
+    alpha_p = 1
+    alpha_m = 1
+    # U_G_x_N_p = U * (G_x_full @ N_p_full.ravel(order='F'))
+    # V_G_y_N_p = V * (G_y_full @ N_p_full.ravel(order='F'))
+    # U_G_x_N_m = U * (G_x_full @ N_m_full.ravel(order='F'))
+    # V_G_y_N_m = V * (G_y_full @ N_m_full.ravel(order='F'))
+    
+    # u_G_N_p = alpha_p * (U_G_x_N_p + V_G_y_N_p)
+    # u_G_N_m = alpha_m * (U_G_x_N_m + V_G_y_N_m)
+
+    dNdx_p = np.where(
+        U.reshape((Ny, Nx), order='F') > 0,
+        (N_p_full[1:-1, 1:-1] - N_p_full[1:-1, :-2]) / dx,
+        (N_p_full[1:-1, 2:]   - N_p_full[1:-1, 1:-1]) / dx
+    )
+
+    dNdy_p = np.where(
+        V.reshape((Ny, Nx), order='F') > 0,
+        (N_p_full[1:-1, 1:-1] - N_p_full[:-2,  1:-1]) / dx,
+        (N_p_full[2:,  1:-1]  - N_p_full[1:-1, 1:-1]) / dx
+    )
+
+    dNdx_m = np.where(
+        U.reshape((Ny, Nx), order='F') > 0,
+        (N_m_full[1:-1, 1:-1] - N_m_full[1:-1, :-2]) / dx,
+        (N_m_full[1:-1, 2:]   - N_m_full[1:-1, 1:-1]) / dx
+    )
+
+    dNdy_m = np.where(
+        V.reshape((Ny, Nx), order='F') > 0,
+        (N_m_full[1:-1, 1:-1] - N_m_full[:-2,  1:-1]) / dx,
+        (N_m_full[2:,  1:-1]  - N_m_full[1:-1, 1:-1]) / dx
+    )
+
+    adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
+    adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
+
+    b_Ctx[:sz] =  -dLap.solve_A(-Lap @ (dl2 * Phi) + 0.5 * N_p - 0.5 * N_m) #dl2 * Phi_BC
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p))
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m))
+    b_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    
+    return b_Ctx
+
+def Build_RHS_Schur_System(ctxt, ctxt_guess, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, Sop_prime, dx):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny
+    q_i = 3 * sz
+    Phi = ctxt_guess[:sz]
+    N_p = ctxt_guess[sz:2*sz]
+    N_m = ctxt_guess[2*sz:3*sz]
+    p = ctxt_guess[q_i:q_i+Nib] # remove
+
+    Phi_true = ctxt[:sz]
+    N_p_true = ctxt[sz:2*sz]
+    N_m_true = ctxt[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+
+    Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
+    N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
+    N_m_reshaped = N_m.reshape((Ny, Nx), order='F')
+
+    # build full matrices
+    Phi_full = np.zeros((Ny+2, Nx+2))
+    N_p_full = np.ones((Ny+2, Nx+2))
+    N_m_full = np.ones((Ny+2, Nx+2))
+
+    Phi_full[1:-1, 1:-1] = Phi_reshaped
+    Phi_full[1:-1, 0] = Phi_reshaped[:, -1]
+    Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
+    Phi_full[0, :] = -25
+    Phi_full[-1, :] = 25
+    N_p_full[1:-1, 1:-1] = N_p_reshaped
+    N_m_full[1:-1, 1:-1] = N_m_reshaped
+
+    dl2 = delta_layer**2
+
+    computed_lap = (-Lap) @ Phi_true
     computed_lap = computed_lap + Phi_BC
     
     alpha_p = 1
@@ -638,15 +727,128 @@ def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, 
 
     adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
+    
+    b_Ctx[:sz] = (-Lap) @ (dl2 * Phi_true) + 0.5 * N_p_true - 0.5 * N_m_true
+    #b_Ctx[:sz] = -dl2 * Phi_BC - dl2 * dLap(Phi_true) + 0.5 * N_p_true - 0.5 * N_m_true #-dl2 * Phi_BC 
+    #b_Ctx[:sz] =  -dl2 * dLap(Phi_true) - dl2 * Phi_BC - 0.5 * dLap.solve_A(-N_p_true * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi_true, N_p_true)) + 0.5 * dLap.solve_A(N_m_true * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi_true, N_m_true))
+    b_Ctx[sz:2*sz] =  -N_p_true * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi_true, N_p_true)
+    b_Ctx[2*sz:3*sz] =  N_m_true * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi_true, N_m_true)
+    b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
 
-    b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p)
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m)
-    b_Ctx[q_i:q_i+Nib] = Q_BC
-    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
-    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    # b_Ctx[:sz] = -dl2 * Phi_BC - dl2 * dLap(Phi_true) + 0.5 * N_p_true - 0.5 * N_m_true #+ dl2 * Phi_true + dLap.solve_A(-0.5 * N_p_true + 0.5 * N_m_true)
+    # b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p) - dLap(N_p_true)
+    # b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m) - dLap(N_m_true)
+    # b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    # b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    # b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+
+    # b_phi =  -dLap(dl2 * Phi_true) #+ dl2 * Phi_true + dLap.solve_A(-0.5 * N_p_true + 0.5 * N_m_true)
+    # b_n_p =  -N_p * computed_lap - G_d_G(Phi, N_p) - dLap(N_p_true)
+    # b_n_m =  N_m * computed_lap + G_d_G(Phi, N_m) - dLap(N_m_true)
+    # b_p = delta_layer * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    # b_p_p = -Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F')) + Jop_prime(N_p_true.reshape(Ny, Nx, order='F'))
+    # b_p_m = Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F')) + Jop_prime(N_m_true.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
+
+def Build_RHS_Schur_System_True(ctxt_true, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, Sop_prime, dx):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny
+    q_i = 3 * sz
+
+    Phi_true = ctxt_true[:sz]
+    N_p_true = ctxt_true[sz:2*sz]
+    N_m_true = ctxt_true[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+
+    Phi_reshaped = Phi_true.reshape((Ny, Nx), order='F')
+    N_p_reshaped = N_p_true.reshape((Ny, Nx), order='F')
+    N_m_reshaped = N_m_true.reshape((Ny, Nx), order='F')
+
+    # build full matrices
+    Phi_full = np.zeros((Ny+2, Nx+2))
+    N_p_full = np.ones((Ny+2, Nx+2))
+    N_m_full = np.ones((Ny+2, Nx+2))
+
+    Phi_full[1:-1, 1:-1] = Phi_reshaped
+    Phi_full[1:-1, 0] = Phi_reshaped[:, -1]
+    Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
+    Phi_full[0, :] = -25
+    Phi_full[-1, :] = 25
+    N_p_full[1:-1, 1:-1] = N_p_reshaped
+    N_m_full[1:-1, 1:-1] = N_m_reshaped
+
+    dl2 = delta_layer**2
+
+    computed_lap = (-Lap) @ Phi_true
+    computed_lap = computed_lap + Phi_BC
+    
+    alpha_p = 1
+    alpha_m = 1
+    # U_G_x_N_p = U * (G_x_full @ N_p_full.ravel(order='F'))
+    # V_G_y_N_p = V * (G_y_full @ N_p_full.ravel(order='F'))
+    # U_G_x_N_m = U * (G_x_full @ N_m_full.ravel(order='F'))
+    # V_G_y_N_m = V * (G_y_full @ N_m_full.ravel(order='F'))
+    
+    # u_G_N_p = alpha_p * (U_G_x_N_p + V_G_y_N_p)
+    # u_G_N_m = alpha_m * (U_G_x_N_m + V_G_y_N_m)
+
+    dNdx_p = np.where(
+    U.reshape((Ny, Nx), order='F') > 0,
+        (N_p_full[1:-1, 1:-1] - N_p_full[1:-1, :-2]) / dx,
+        (N_p_full[1:-1, 2:]   - N_p_full[1:-1, 1:-1]) / dx
+    )
+
+    dNdy_p = np.where(
+        V.reshape((Ny, Nx), order='F') > 0,
+        (N_p_full[1:-1, 1:-1] - N_p_full[:-2,  1:-1]) / dx,
+        (N_p_full[2:,  1:-1]  - N_p_full[1:-1, 1:-1]) / dx
+    )
+
+    dNdx_m = np.where(
+        U.reshape((Ny, Nx), order='F') > 0,
+        (N_m_full[1:-1, 1:-1] - N_m_full[1:-1, :-2]) / dx,
+        (N_m_full[1:-1, 2:]   - N_m_full[1:-1, 1:-1]) / dx
+    )
+
+    dNdy_m = np.where(
+        V.reshape((Ny, Nx), order='F') > 0,
+        (N_m_full[1:-1, 1:-1] - N_m_full[:-2,  1:-1]) / dx,
+        (N_m_full[2:,  1:-1]  - N_m_full[1:-1, 1:-1]) / dx
+    )
+
+    adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
+    adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
+    
+    b_Ctx[:sz] = (-Lap) @ (dl2 * Phi_true) + 0.5 * N_p_true - 0.5 * N_m_true
+    b_Ctx[sz:2*sz] =  -N_p_true * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi_true, N_p_true)
+    b_Ctx[2*sz:3*sz] =  N_m_true * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi_true, N_m_true)
+    b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+
+    return b_Ctx
+
+# def Build_RHS_Schur_System_Manufactured_Solution(ctxt_true, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, Sop_prime, dx):
+#     r = np.sqrt(x**2 + y**2)
+
+#     b_Ctx[:sz] = np.cos(r) / r - np.sin(r)
+#     b_Ctx[sz:2*sz] =  -N_p_true * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi_true, N_p_true)
+#     b_Ctx[2*sz:3*sz] =  N_m_true * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi_true, N_m_true)
+#     b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+#     b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+#     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+
+#     return b_Ctx
 
 class ConstrainedLapOperator:
     def __init__(self, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
