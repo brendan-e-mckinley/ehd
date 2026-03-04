@@ -18,7 +18,7 @@ import stokes_solver_utils_fast as stokes
 ###########################
 
 ## Grid parameters
-size = np.array([5, 6, 7, 8])  # 256; % number of grid points along one direction
+size = np.array([7, 8, 9])  # 256; % number of grid points along one direction
 phi_errors = []
 np_errors = []
 nm_errors = []
@@ -331,6 +331,9 @@ for counter, _ in enumerate(size):
     def b_Op_Schur(ctxt, U_fluid, V_fluid):
         return cpeo.Build_RHS_Schur_System_True(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, Sop_prime, dx)
 
+    def b_Op_MMS():
+        return cpeo.Build_RHS_Schur_System_Manufactured_Solution(ctxt_true, ctxt_BCs_Schur, Xint, Yint, xib, yib, Nx, Ny, Nib, delta_layer)
+
     def b_Op(ctxt, U_fluid, V_fluid):
         return cpeo.Build_RHS_rho_True(ctxt, ctxt_BCs, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
@@ -355,7 +358,7 @@ for counter, _ in enumerate(size):
     ##########################
 
     ## Initialize variables for Rphi = rho solve
-    schurRHS = b_Op_Schur(ctxt_true, U_fluid, V_fluid)
+    schurRHS = b_Op_MMS()
     DU = np.full((len(schurRHS), m), np.nan)
     DG = np.full((len(schurRHS), m), np.nan)
 
@@ -364,7 +367,7 @@ for counter, _ in enumerate(size):
 
     # Build dense Schur matrix
     schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
-    schurRHS = b_Op_Schur(ctxt_true, U_fluid, V_fluid)
+    schurRHS = b_Op_MMS()
     computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
     schurDense = np.zeros((Nib * 3, Nib * 3))
     for col in range(Nib * 3): 
@@ -481,7 +484,7 @@ for counter, _ in enumerate(size):
     #####  solve R*phi = Rho(u, phi)  #####
     #######################################
 
-    schurRHS = b_Op_Schur(ctxt_true, U_fluid, V_fluid)
+    schurRHS = b_Op_MMS()
     computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
 
     # Use SVD to solve
@@ -494,7 +497,7 @@ for counter, _ in enumerate(size):
 
     # Anderson acceleration loop
     for inner_its in range(100000):
-        schurRHS = b_Op_Schur(ctxt_true, U_fluid, V_fluid)
+        schurRHS = b_Op_MMS()
         computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
         
         # Use SVD to solve

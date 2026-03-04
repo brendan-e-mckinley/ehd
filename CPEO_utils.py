@@ -838,17 +838,25 @@ def Build_RHS_Schur_System_True(ctxt_true, ctxt_BCs, U, V, G_x_full, G_y_full, L
 
     return b_Ctx
 
-# def Build_RHS_Schur_System_Manufactured_Solution(ctxt_true, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, Sop_prime, dx):
-#     r = np.sqrt(x**2 + y**2)
+def Build_RHS_Schur_System_Manufactured_Solution(ctxt_true, ctxt_BCs, x, y, xib, yib, Nx, Ny, Nib, delta_layer):
+    b_Ctx = np.zeros_like(ctxt_true)
+    sz = Nx * Ny
+    q_i = 3 * sz
+    dl2 = delta_layer**2
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    
+    r = np.sqrt(x**2 + y**2)
+    rib = np.sqrt(xib**2 + yib**2)
 
-#     b_Ctx[:sz] = np.cos(r) / r - np.sin(r)
-#     b_Ctx[sz:2*sz] =  -N_p_true * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi_true, N_p_true)
-#     b_Ctx[2*sz:3*sz] =  N_m_true * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi_true, N_m_true)
-#     b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
-#     b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
-#     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m_true.reshape(Ny, Nx, order='F')) * Jop_prime(Phi_true.reshape(Ny, Nx, order='F'))
+    b_Ctx[:sz] = (dl2 * (np.cos(r) / r - np.sin(r)) + 0.5 * (np.exp(-np.sin(r)) - np.exp(np.sin(r)))).ravel(order='F')
+    b_Ctx[sz:2*sz] = -(np.exp(-np.sin(r)) * (-(np.cos(r))**2 + np.cos(r) / r - np.sin(r))).ravel(order='F') - N_p_BC
+    b_Ctx[2*sz:3*sz] =  (np.exp(np.sin(r)) * ((np.cos(r))**2 + np.cos(r) / r - np.sin(r))).ravel(order='F') - N_m_BC
+    b_Ctx[q_i:q_i+Nib] = (delta_layer * np.cos(rib)).ravel(order='F')
+    b_Ctx[q_i+Nib:q_i+2*Nib] = (-np.cos(rib) * np.exp(-np.sin(rib))).ravel(order='F')
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = (np.cos(rib) * np.exp(np.sin(rib))).ravel(order='F')
 
-#     return b_Ctx
+    return b_Ctx
 
 class ConstrainedLapOperator:
     def __init__(self, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
