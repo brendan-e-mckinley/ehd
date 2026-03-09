@@ -819,26 +819,31 @@ phi_fit = np.exp(intercept_phi) * Nxs**slope_phi
 np_fit = np.exp(intercept_np) * Nxs**slope_np
 nm_fit = np.exp(intercept_nm) * Nxs**slope_nm
 
-plt.loglog(Nxs, 10 * phi_fit, label=f'Fit Line (Slope: {slope_phi:.2f})')
-plt.loglog(Nxs, phi_errors, label='Error Data')
-plt.title("Error, Phi")
-plt.xlabel("Grid Size")
-plt.ylabel("||Phi - Phi_true||/||Phi_true||")
-plt.legend()
-plt.show()
+# 1. Create figure and 3 stacked subplots (3 rows, 1 column)
+fig, axs = plt.subplots(3, 1, figsize=(8, 12), sharex=True)
 
-plt.loglog(Nxs, 10 * np_fit, label=f'Fit Line (Slope: {slope_phi:.2f})')
-plt.loglog(Nxs, np_errors)
-plt.title("Error, N_p")
-plt.xlabel("Grid Size")
-plt.ylabel("||N_p - N_p_true||/||N_p_true||")
-plt.legend()
-plt.show()
+# 2. Subplot 1: Phi Error
+axs[0].loglog(Nxs, phi_errors, 'o-', label=f'Error (Slope: {slope_phi:.2f})')
+axs[0].set_title(r'Error, $\Phi$')
+axs[0].set_ylabel(r'$||\Phi - \Phi_{true}||/||\Phi_{true}||$')
+axs[0].legend()
+axs[0].grid(True, which="both", ls="-", alpha=0.5)
 
-plt.loglog(Nxs, 10 * nm_fit, label=f'Fit Line (Slope: {slope_phi:.2f})')
-plt.loglog(Nxs, nm_errors)
-plt.title("Error, N_m")
-plt.xlabel("Grid Size")
-plt.ylabel("||N_m - N_m_true||/||N_m_true||")
-plt.legend()
+# 3. Subplot 2: Np Error
+axs[1].loglog(Nxs, np_errors, 's-', label=f'Error (Slope: {slope_np:.2f})')
+axs[1].set_title(r'Error, $N_p$')
+axs[1].set_ylabel(r'$||N_p - N_{p,true}||/||N_{p,true}||$')
+axs[1].legend()
+axs[1].grid(True, which="both", ls="-", alpha=0.5)
+
+# 4. Subplot 3: Nm Error
+axs[2].loglog(Nxs, nm_errors, '^-', label=f'Error (Slope: {slope_nm:.2f})')
+axs[2].set_title(r'Error, $N_m$')
+axs[2].set_ylabel(r'$||N_m - N_{m,true}||/||N_{m,true}||$')
+axs[2].set_xlabel('Grid Size')
+axs[2].legend()
+axs[2].grid(True, which="both", ls="-", alpha=0.5)
+
+# 5. Final adjustments
+plt.tight_layout()
 plt.show()
