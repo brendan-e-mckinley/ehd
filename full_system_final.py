@@ -1,7 +1,9 @@
 
 import numpy as np
+import pyvista as pv
 import cProfile
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import time
 from numba import jit
 from sksparse.cholmod import cholesky
@@ -37,7 +39,7 @@ beta = 0.2
 m = 50
 
 # time parameters
-N_t = 100
+N_t = 200
 dt = 0.01
 
 ##########################
@@ -588,94 +590,131 @@ for t_step in range(N_t):
         Nm_prev = Nm.ravel(order='F')
 
     # ------------------------------------------------------
-    # Plot N_p
+    # Plot N_p (PyVista + matplotlib overlay)
     # ------------------------------------------------------
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection='3d')
 
-    surf = ax.plot_surface(
-        Xint, Yint, Np,
-        cmap='coolwarm',
-        edgecolor='none',
-        linewidth=0,
-        vmin=0.6,  # Fixed minimum
-        vmax=1.4   # Fixed maximum
+    radius = 0.25
+    new_cmap = plt.cm.get_cmap('jet', 256)
+    new_colors = new_cmap(np.linspace(0.3, 1, 256))
+    from matplotlib.colors import ListedColormap, Normalize
+    custom_cmap = ListedColormap(new_colors)
+
+    # Create structured grid
+    grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(Np))
+    grid["N_p"] = Np.flatten(order='F')
+    grid = grid.clip_box((-2, 2, -2, 2, -1, 1), invert=False)
+
+    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
+    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.add_mesh(
+        grid,
+        scalars="N_p",
+        cmap=custom_cmap,
+        clim=[1.0, 1.6],
+        show_edges=False,
+        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
     )
 
-    # Add beige circle patch at origin
-    theta = np.linspace(0, 2*np.pi, 100)
-    radius = 0.25
-    x_circle = radius * np.cos(theta)
-    y_circle = radius * np.sin(theta)
-    z_circle = np.full_like(x_circle, 10)  # High z-value to cover the surface
+    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
+    plotter.add_mesh(disk, color="white", show_edges=False)
 
-    ax.plot(x_circle, y_circle, z_circle, color='beige', linewidth=2)
-    ax.plot_trisurf(x_circle, y_circle, z_circle, color='beige', alpha=1.0, shade=False)
+    plotter.view_xy()
+    # Set camera to EXACTLY the data bounds with zero padding
+    plotter.camera.tight(padding=0.0)
 
-    fig.colorbar(surf, shrink=0.5, aspect=5)
+    pv_image = plotter.screenshot(None, return_img=True)
+    plotter.close()
 
-    # Top-down view
-    ax.view_init(elev=90, azim=-90)
+    # --- Composite in matplotlib ---
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
 
-    # Clean up 3D clutter
-    ax.set_zticks([])
-    ax.set_zlabel('')
+    ax.imshow(
+        pv_image,
+        extent=[-2, 2, -2, 2],
+        origin='upper',
+        aspect='equal',
+        zorder=0
+    )
 
-    # Labels
+    mask = X**2 + Y**2 <= radius**2
+    UFull_masked = UFull.copy()
+    VFull_masked = VFull.copy()
+    UFull_masked[mask] = np.nan
+    VFull_masked[mask] = np.nan
+    speed = np.sqrt(UFull**2 + VFull**2)
+    # 2. Normalize speed to 0-1 range for alpha (Max speed after steady state is 0.8)
+    alpha_map = speed / 0.8
+    # Optional: Apply a minimum alpha so low speed isn't invisible
+    alpha_map = 0.2 + 0.8 * alpha_map 
+
+    # 4. Apply the alpha mapping to the lines
+    # stream.lines is a LineCollection
+    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=3, linewidth=1, arrowsize=1.5, zorder=1)
+    for arrow in ax.get_children():
+        if isinstance(arrow, patches.FancyArrowPatch):
+            arrow.set_alpha(0.3)
+    stream.lines.set_alpha(alpha_map)
+
+    # Add colorbar via matplotlib (matches custom_cmap exactly)
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=1.0, vmax=1.6))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='N_p', shrink=0.8)
+
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_aspect('equal')
     ax.set_xlabel('X axis')
     ax.set_ylabel('Y axis')
-    ax.set_title('Top-Down View of N_p')
-    ax.grid(False)
+    ax.grid(True, alpha=0.3)
 
-    plt.xlim(-2, 2)
-    plt.ylim(-2, 2)
-    plt.savefig('img/n_p/n_p_' + str(t_step) + '.png', dpi=300, bbox_inches='tight')
+    plt.tight_layout()
+    plt.savefig(f'img/n_p_varying_opacity/n_p_{t_step}.png', dpi=100, bbox_inches='tight')
     plt.close()
 
     # ------------------------------------------------------
     # Plot N_m
     # ------------------------------------------------------
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection='3d')
+    # fig = plt.figure(figsize=(10, 7))
+    # ax = fig.add_subplot(111, projection='3d')
 
-    surf = ax.plot_surface(
-        Xint, Yint, Nm,
-        cmap='coolwarm',
-        edgecolor='none',
-        linewidth=0,
-        vmin=0.6,  # Fixed minimum
-        vmax=1.4   # Fixed maximum
-    )
+    # surf = ax.plot_surface(
+    #     Xint, Yint, Nm,
+    #     cmap='coolwarm',
+    #     edgecolor='none',
+    #     linewidth=0,
+    #     vmin=0.6,  # Fixed minimum
+    #     vmax=1.4   # Fixed maximum
+    # )
 
-    # Add beige circle patch at origin
-    theta = np.linspace(0, 2*np.pi, 100)
-    radius = 0.25
-    x_circle = radius * np.cos(theta)
-    y_circle = radius * np.sin(theta)
-    z_circle = np.full_like(x_circle, 10)  # High z-value to cover the surface
+    # # Add beige circle patch at origin
+    # theta = np.linspace(0, 2*np.pi, 100)
+    # radius = 0.25
+    # x_circle = radius * np.cos(theta)
+    # y_circle = radius * np.sin(theta)
+    # z_circle = np.full_like(x_circle, 10)  # High z-value to cover the surface
 
-    ax.plot(x_circle, y_circle, z_circle, color='beige', linewidth=2)
-    ax.plot_trisurf(x_circle, y_circle, z_circle, color='beige', alpha=1.0, shade=False)
+    # ax.plot(x_circle, y_circle, z_circle, color='beige', linewidth=2)
+    # ax.plot_trisurf(x_circle, y_circle, z_circle, color='beige', alpha=1.0, shade=False)
 
-    fig.colorbar(surf, shrink=0.5, aspect=5)
+    # fig.colorbar(surf, shrink=0.5, aspect=5)
 
-    # Top-down view
-    ax.view_init(elev=90, azim=-90)
+    # # Top-down view
+    # ax.view_init(elev=90, azim=-90)
 
-    # Clean up 3D clutter
-    ax.set_zticks([])
-    ax.set_zlabel('')
+    # # Clean up 3D clutter
+    # ax.set_zticks([])
+    # ax.set_zlabel('')
 
-    # Labels
-    ax.set_xlabel('X axis')
-    ax.set_ylabel('Y axis')
-    ax.set_title('Top-Down View of N_m')
-    ax.grid(False)
+    # # Labels
+    # ax.set_xlabel('X axis')
+    # ax.set_ylabel('Y axis')
+    # ax.set_title('Top-Down View of N_m')
+    # ax.grid(False)
 
-    plt.xlim(-2, 2)
-    plt.ylim(-2, 2)
-    plt.savefig('img/n_m/n_m_' + str(t_step) + '.png', dpi=300, bbox_inches='tight')
-    plt.close()
+    # plt.xlim(-2, 2)
+    # plt.ylim(-2, 2)
+    # plt.savefig('img/n_m/n_m_' + str(t_step) + '.png', dpi=300, bbox_inches='tight')
+    # plt.close()
 
 # check Nu residual 
 Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
