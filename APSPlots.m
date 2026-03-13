@@ -37,10 +37,11 @@ x_i = 0.67051;
 y_i = 0.741901;
 
 figure;
-plot(X_scaled, Y_scaled, 'r-', X_scaled', Y_scaled', 'r-'); % Plots horizontal and vertical lines in blue
 set(gca, 'Color', [0.8 0.9 1.0]); 
+patch(xib_scaled, yib_scaled, [1, 1, 1]); 
 hold on;
-patch(xib_scaled, yib_scaled, [1 1 1]); 
+plot(X_scaled, Y_scaled, 'k-', X_scaled', Y_scaled', 'k-'); % Plots horizontal and vertical lines in blue
+
 
 xib_scaled(16) = NaN;
 find_xib = xib_scaled - x_i;
@@ -49,7 +50,7 @@ zero_locations = (find_Xib == 0);
 X_scaled(zero_locations) = NaN;
 Y_scaled(zero_locations) = NaN;
 
-scatter(xib_scaled,yib_scaled,'filled', 'MarkerFaceColor', 'b')
+scatter(xib_scaled,yib_scaled,'filled', 'MarkerFaceColor', 'k')
 scatter(x_i,y_i,'filled', 'MarkerFaceColor', 'm')
 scatter(X_i,Y_i,'s','filled', 'MarkerFaceColor', 'm')
 xlabel('x / R');
@@ -91,4 +92,65 @@ ax2.YLabel.Rotation = 90;
 ylim(ax2, [-25000, 25000])
 %title(ax2, '$\frac{\partial\delta_h}{\partial\nu_i}(\mathbf{x}_i - \mathbf{X}_g)$', 'Interpreter', 'latex');
 
+%% Electric Double Layer Comparison
+clear; clc; close all;
+% 
+% set(0,'defaulttextInterpreter','latex')
+% set(0,'defaultAxesTickLabelInterpreter','latex'); 
+% set(0,'defaultLegendInterpreter','latex');
+set(0,'defaultLineLineWidth',0.5);
+set(0,'defaulttextInterpreter','latex')
+set(0,'defaultAxesTickLabelInterpreter','latex'); 
+set(0,'defaultLegendInterpreter','latex');
+set(0,'defaultAxesFontSize',20)
+% set(0,'defaultAxesFontSize',35)
 
+Nx = 450; %256; % number of grid point along one direction
+L = 4.0*pi; %2.0*pi
+x = linspace(-L/2,L/2,Nx+2); % periodic grid
+dx = x(2)-x(1);
+y = x;
+dy = y(2)-y(1);
+
+[X,Y] = meshgrid(x,y); % make 2D grid
+X_scaled = X;
+Y_scaled = Y;
+
+%%%%%%%%%%%%
+% Make immersed boundary mats
+rad = 1;
+rad_defuse = 1.1;
+dth = dx/rad;
+theta = (0:dth:(2*pi+dth))';
+Nib = length(theta);
+xib = rad*cos(theta);
+yib = rad*sin(theta);
+n_x = cos(theta);
+n_y = sin(theta);
+xib_defuse = rad_defuse*cos(theta);
+yib_defuse = rad_defuse*sin(theta);
+
+
+
+figure;
+set(gca, 'Color', [0.8 0.9 1.0]); 
+patch(xib, yib, [1, 1, 1]); 
+hold on;
+plot(xib_defuse, yib_defuse, '-k');
+xlim([-4*pi, 4*pi]);
+ylim([-4*pi, 4*pi]);
+xlabel('x / R');
+ylabel('y / R');
+%plot(X_scaled, Y_scaled, 'k-', X_scaled', Y_scaled', 'k-'); % Plots horizontal and vertical lines in blue
+
+figure;
+set(0,'defaultLineLineWidth',2);
+set(gca, 'Color', [0.8 0.9 1.0]); 
+p = patch(xib, yib, [1, 1, 1]); 
+set(p, 'LineWidth', 2)
+hold on;
+plot(xib_defuse, yib_defuse, '-k');
+xlim([-1.25, 1.25]);
+ylim([-1.25, 1.25]);
+xlabel('x / R');
+ylabel('y / R');

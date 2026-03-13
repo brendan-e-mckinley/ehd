@@ -30,7 +30,7 @@ dy = y[1] - y[0]
 ## Miscellaneous parameters
 tol = 1e-4
 beta_BC = 7.94
-sigma_bc = 0  # 0.68
+sigma_bc = 0.78  # 0.68
 delta_layer = 0.1  # 5*dx; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
@@ -40,7 +40,7 @@ m = 50
 
 # time parameters
 N_t = 200
-dt = 0.001
+dt = 0.01
 
 ##########################
 ######  GRID SETUP  ######
@@ -191,8 +191,7 @@ ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    #np.zeros(len(xib)) - (sigma_bc),
-    -4 * yib * beta_BC,
+    np.zeros(len(xib)) - (sigma_bc),
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -202,8 +201,7 @@ ctxt_BCs = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    #np.zeros(len(xib)) - (sigma_bc/delta_layer),
-    -4 * yib * beta_BC / delta_layer,
+    np.zeros(len(xib)) - (sigma_bc/delta_layer),
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -592,105 +590,19 @@ for t_step in range(N_t):
         Nm_prev = Nm.ravel(order='F')
 
     # ------------------------------------------------------
-    # Plot N_net (PyVista + matplotlib overlay)
-    # ------------------------------------------------------
-
-    N_net = (Np - Nm) / 2
-
-    radius = 0.25
-    # new_cmap = plt.cm.get_cmap('jet', 256)
-    # new_colors = new_cmap(np.linspace(0.3, 1, 256))
-    from matplotlib.colors import ListedColormap, Normalize
-    # custom_cmap = ListedColormap(new_colors)
-    custom_cmap = plt.cm.get_cmap('coolwarm', 256)
-
-    # Create structured grid
-    grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(N_net))
-    grid["N_net"] = N_net.flatten(order='F')
-    grid = grid.clip_box((-2, 2, -2, 2, -1, 1), invert=False)
-
-    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
-    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
-    plotter.add_mesh(
-        grid,
-        scalars="N_net",
-        cmap=custom_cmap,
-        clim=[-0.5, 0.5],
-        show_edges=False,
-        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
-    )
-
-    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
-    plotter.add_mesh(disk, color="white", show_edges=False)
-
-    plotter.view_xy()
-    # Set camera to EXACTLY the data bounds with zero padding
-    plotter.camera.tight(padding=0.0)
-
-    pv_image = plotter.screenshot(None, return_img=True)
-    plotter.close()
-
-    # --- Composite in matplotlib ---
-    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
-
-    ax.imshow(
-        pv_image,
-        extent=[-2, 2, -2, 2],
-        origin='upper',
-        aspect='equal',
-        zorder=0
-    )
-
-    mask = X**2 + Y**2 <= radius**2
-    UFull_masked = UFull.copy()
-    VFull_masked = VFull.copy()
-    UFull_masked[mask] = np.nan
-    VFull_masked[mask] = np.nan
-    speed = np.sqrt(UFull**2 + VFull**2)
-    # 2. Normalize speed to 0-1 range for alpha (Max speed after steady state is 0.8)
-    alpha_map = speed / 0.8
-    # Optional: Apply a minimum alpha so low speed isn't invisible
-    alpha_map = 0.2 + 0.8 * alpha_map 
-
-    # 4. Apply the alpha mapping to the lines
-    # stream.lines is a LineCollection
-    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=3, linewidth=1, arrowsize=1.5, zorder=1)
-    for arrow in ax.get_children():
-        if isinstance(arrow, patches.FancyArrowPatch):
-            arrow.set_alpha(0.3)
-    stream.lines.set_alpha(alpha_map)
-
-    # Add colorbar via matplotlib (matches custom_cmap exactly)
-    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=-0.5, vmax=0.5))
-    sm.set_array([])
-    plt.colorbar(sm, ax=ax, label='N_net', shrink=0.8)
-
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
-    ax.set_aspect('equal')
-    ax.set_xlabel('X axis')
-    ax.set_ylabel('Y axis')
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(f'img/n_net_dc/n_net_{t_step}.png', dpi=100, bbox_inches='tight')
-    plt.close()
-
-    # ------------------------------------------------------
-    # Plot Np (PyVista + matplotlib overlay)
+    # Plot N_p (PyVista + matplotlib overlay)
     # ------------------------------------------------------
 
     radius = 0.25
-    # new_cmap = plt.cm.get_cmap('jet', 256)
-    # new_colors = new_cmap(np.linspace(0.3, 1, 256))
+    new_cmap = plt.cm.get_cmap('jet', 256)
+    new_colors = new_cmap(np.linspace(0.3, 1, 256))
     from matplotlib.colors import ListedColormap, Normalize
-    # custom_cmap = ListedColormap(new_colors)
-    custom_cmap = plt.cm.get_cmap('coolwarm', 256)
+    custom_cmap = ListedColormap(new_colors)
 
     # Create structured grid
     grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(Np))
     grid["N_p"] = Np.flatten(order='F')
-    grid = grid.clip_box((-2, 2, -2, 2, -1, 1), invert=False)
+    grid = grid.clip_box((-np.pi, np.pi, -np.pi, np.pi, -1, 1), invert=False)
 
     # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
     plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
@@ -698,7 +610,7 @@ for t_step in range(N_t):
         grid,
         scalars="N_p",
         cmap=custom_cmap,
-        clim=[0.5, 1.5],
+        clim=[1.0, 1.6],
         show_edges=False,
         show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
     )
@@ -718,7 +630,7 @@ for t_step in range(N_t):
 
     ax.imshow(
         pv_image,
-        extent=[-2, 2, -2, 2],
+        extent=[-np.pi, np.pi, -np.pi, np.pi],
         origin='upper',
         aspect='equal',
         zorder=0
@@ -744,19 +656,19 @@ for t_step in range(N_t):
     stream.lines.set_alpha(alpha_map)
 
     # Add colorbar via matplotlib (matches custom_cmap exactly)
-    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=0.5, vmax=1.5))
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=1.0, vmax=1.6))
     sm.set_array([])
     plt.colorbar(sm, ax=ax, label='N_p', shrink=0.8)
 
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
+    # ax.set_xlim(-2, 2)
+    # ax.set_ylim(-2, 2)
     ax.set_aspect('equal')
     ax.set_xlabel('X axis')
     ax.set_ylabel('Y axis')
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(f'img/n_p_dc/n_p_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.savefig(f'img/n_p_sign/n_p_{t_step}.png', dpi=100, bbox_inches='tight')
     plt.close()
 
     # ------------------------------------------------------
@@ -764,16 +676,15 @@ for t_step in range(N_t):
     # ------------------------------------------------------
 
     radius = 0.25
-    # new_cmap = plt.cm.get_cmap('jet', 256)
-    # new_colors = new_cmap(np.linspace(0.3, 1, 256))
+    new_cmap = plt.cm.get_cmap('jet', 256)
+    new_colors = new_cmap(np.linspace(0.3, 1, 256))
     from matplotlib.colors import ListedColormap, Normalize
-    # custom_cmap = ListedColormap(new_colors)
-    custom_cmap = plt.cm.get_cmap('coolwarm', 256)
+    custom_cmap = ListedColormap(new_colors)
 
     # Create structured grid
     grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(Nm))
     grid["N_m"] = Nm.flatten(order='F')
-    grid = grid.clip_box((-2, 2, -2, 2, -1, 1), invert=False)
+    grid = grid.clip_box((-np.pi, np.pi, -np.pi, np.pi, -1, 1), invert=False)
 
     # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
     plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
@@ -781,7 +692,7 @@ for t_step in range(N_t):
         grid,
         scalars="N_m",
         cmap=custom_cmap,
-        clim=[0.5, 1.5],
+        clim=[1.0, 1.6],
         show_edges=False,
         show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
     )
@@ -801,7 +712,7 @@ for t_step in range(N_t):
 
     ax.imshow(
         pv_image,
-        extent=[-2, 2, -2, 2],
+        extent=[-np.pi, np.pi, -np.pi, np.pi],
         origin='upper',
         aspect='equal',
         zorder=0
@@ -827,19 +738,19 @@ for t_step in range(N_t):
     stream.lines.set_alpha(alpha_map)
 
     # Add colorbar via matplotlib (matches custom_cmap exactly)
-    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=0.5, vmax=1.5))
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=1.0, vmax=1.6))
     sm.set_array([])
     plt.colorbar(sm, ax=ax, label='N_m', shrink=0.8)
 
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
+    # ax.set_xlim(-2, 2)
+    # ax.set_ylim(-2, 2)
     ax.set_aspect('equal')
     ax.set_xlabel('X axis')
     ax.set_ylabel('Y axis')
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(f'img/n_m_dc/n_m_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.savefig(f'img/n_m_sign/n_m_{t_step}.png', dpi=100, bbox_inches='tight')
     plt.close()
 
 # check Nu residual 
