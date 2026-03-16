@@ -2,6 +2,7 @@
 import numpy as np
 import pyvista as pv
 import cProfile
+import cmasher as cmr
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import time
@@ -12,8 +13,9 @@ from scipy.sparse.linalg import splu, eigs, spsolve, gmres, LinearOperator
 from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
-import CPEO_utils_dynamic as cpeo
+import CPEO_utils_dynamic_ac as cpeo
 import stokes_solver_utils_fast as stokes
+from PIL import Image
 
 ###########################
 ######  PARAMETERS  #######
@@ -28,9 +30,9 @@ y = x.copy()
 dy = y[1] - y[0]
 
 ## Miscellaneous parameters
-tol = 1e-4
+tol = 5e-4
 beta_BC = 7.94
-sigma_bc = 0  # 0.68
+sigma_bc = 0.78  # 0.68
 delta_layer = 0.1  # 5*dx; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
@@ -39,8 +41,9 @@ beta = 0.2
 m = 50
 
 # time parameters
-N_t = 200
+N_t = 2000
 dt = 0.01
+start_t = 0
 
 ##########################
 ######  GRID SETUP  ######
@@ -163,23 +166,22 @@ stokes_LU = splu(big_L)
 #############################################
 
 ## Exact solutions
-def Phi_exact(x, y):
-    return beta_BC * y + 0 * x
+def Phi_exact(t, x, y):
+    return beta_BC * np.cos(20 * np.pi * t) * y + 0 * x
 def Npm_exact(x, y):
     return 0 * x + 1.0
 
 # Compute exact solutions
-Phi_BC = Phi_exact(X, Y)
 N_pm_BC = Npm_exact(X, Y)
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(Xint)
 Npm_BCs = np.zeros_like(Xint)
 
-Phi_BCs[0, :] = (1/dy/dy) * Phi_exact(xint, Y[0, 0])
-Phi_BCs[-1, :] += (1/dy/dy) * Phi_exact(xint, Y[-1, -1])
-Phi_BCs[:, 0] += (1/dx/dx) * Phi_exact(X[0, 0], yint)
-Phi_BCs[:, -1] += (1/dx/dx) * Phi_exact(X[-1, -1], yint)
+Phi_BCs[0, :] = (1/dy/dy) * Phi_exact(start_t * dt, xint, Y[0, 0])
+Phi_BCs[-1, :] += (1/dy/dy) * Phi_exact(start_t * dt, xint, Y[-1, -1])
+Phi_BCs[:, 0] += (1/dx/dx) * Phi_exact(start_t * dt, X[0, 0], yint)
+Phi_BCs[:, -1] += (1/dx/dx) * Phi_exact(start_t * dt, X[-1, -1], yint)
 
 Npm_BCs[0, :] = (1/dy/dy) * Npm_exact(xint, Y[0, 0])
 Npm_BCs[-1, :] += (1/dy/dy) * Npm_exact(xint, Y[-1, -1])
@@ -191,8 +193,7 @@ ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    #np.zeros(len(xib)) - (sigma_bc),
-    yib * beta_BC,
+    -yib * beta_BC,
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -202,8 +203,7 @@ ctxt_BCs = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    #np.zeros(len(xib)) - (sigma_bc/delta_layer),
-    yib * beta_BC / delta_layer,
+    -yib * beta_BC / delta_layer,
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -215,6 +215,18 @@ METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 Ny_ld = int(ld['Ny'][0, 0])
 Nx_ld = int(ld['Nx'][0, 0])
 Nib_ld = int(ld['Nib'][0, 0])
+
+# Xint_ld = ld['Xint']
+# Yint_ld = ld['Yint']
+# xib_ld = ld['xib']
+
+# Nx_ld = len(Xint_ld[0])
+# Ny_ld = len(Xint_ld[1])
+# Nib_ld = len(xib_ld[0])
+
+# dtheta_ld = 2 * np.pi / (Nib_ld + 1)
+# theta_ld = np.arange(0, 2*np.pi - dtheta_ld, dtheta_ld)
+
 sz = Ny_ld * Nx_ld
 
 ctxt_ld = ld['ctxt'].ravel(order='F')
@@ -294,14 +306,14 @@ def Jop(P):
 def Jop_prime(P):
     return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
 
-def G_d_G(Phi, N_pm):
-    return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
+def G_d_G(t, Phi, N_pm):
+    return cpeo.Grad_dot_Grad(t, Phi, N_pm, dx, dy, Nx, Ny, N_pm_BC, X, Y)
 
-def b_Op_Schur(ctxt, N_p_prev, N_m_prev, U_fluid, V_fluid):
-    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, N_p_prev, N_m_prev, U_fluid, V_fluid, Lap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt)
+def b_Op_Schur(t, ctxt, ctxt_BCs_Schur, ac_value, N_p_prev, N_m_prev, U_fluid, V_fluid):
+    return cpeo.Build_RHS_Schur_System_ac(t, ctxt, ctxt_BCs_Schur, ac_value, N_p_prev, N_m_prev, U_fluid, V_fluid, Lap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt)
 
-def b_Op(ctxt, N_p_prev, N_m_prev, U_fluid, V_fluid):
-    return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, N_p_prev, N_m_prev, U_fluid, V_fluid, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt)
+def b_Op(t, ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U_fluid, V_fluid):
+    return cpeo.Build_RHS_rho_ac(t, ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U_fluid, V_fluid, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt)
 
 def AxOp(ctxt):
     return cpeo.Constrained_Lap(ctxt, ctxt, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
@@ -312,8 +324,10 @@ delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
 #####  SOLVER SETUP  #####
 ##########################
 
+ac_value = beta_BC * np.cos(20 * np.pi * dt * start_t)
+
 ## Initialize variables for Rphi = rho solve
-schurRHS = b_Op_Schur(ctxt, Np_prev, Nm_prev, U_fluid, V_fluid)
+schurRHS = b_Op_Schur(0, ctxt, ctxt_BCs_Schur, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
 DU = np.full((len(schurRHS), m), np.nan)
 DG = np.full((len(schurRHS), m), np.nan)
 
@@ -322,7 +336,7 @@ p_guess = u_n[3*Nx*Ny:]
 
 # Build dense Schur matrix
 schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
-schurRHS = b_Op_Schur(ctxt, Np_prev, Nm_prev, U_fluid, V_fluid)
+schurRHS = b_Op_Schur(0, ctxt, ctxt_BCs_Schur, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
 computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
 schurDense = np.zeros((Nib * 3, Nib * 3))
 for col in range(Nib * 3): 
@@ -352,8 +366,8 @@ Nm_full = np.ones((Ny+2, Nx+2))
 Phi_full[1:-1, 1:-1] = Phi
 Phi_full[1:-1, 0] = Phi[:, -1]
 Phi_full[1:-1, -1] = Phi[:, -1]
-Phi_full[0, :] = -25 # TODO: HACKY AND WRONG, FIX THIS
-Phi_full[-1, :] = 25 # TODO: HACKY AND WRONG, FIX THIS
+Phi_full[0, :] = -ac_value # TODO: HACKY AND WRONG, FIX THIS
+Phi_full[-1, :] = ac_value # TODO: HACKY AND WRONG, FIX THIS
 Np_full[1:-1, 1:-1] = Np
 Nm_full[1:-1, 1:-1] = Nm
 
@@ -431,7 +445,8 @@ pr.enable()
 #######  FULL SYSTEM LOOP  #######
 ##################################
 
-for t_step in range(N_t):
+for t_step in range(start_t,N_t):
+    t = dt * t_step
     ##################################
     #######  single time step  #######
     ##################################
@@ -440,7 +455,7 @@ for t_step in range(N_t):
         #####  solve R*phi = Rho(u, phi)  #####
         #######################################
 
-        schurRHS = b_Op_Schur(ctxt, Np_prev, Nm_prev, U_fluid, V_fluid)
+        schurRHS = b_Op_Schur(t, ctxt, ctxt_BCs_Schur, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
         computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
 
         # Use SVD to solve
@@ -453,7 +468,7 @@ for t_step in range(N_t):
 
         # Anderson acceleration loop
         for inner_its in range(100000):
-            schurRHS = b_Op_Schur(u_next, Np_prev, Nm_prev, U_fluid, V_fluid)
+            schurRHS = b_Op_Schur(t, u_next, ctxt_BCs_Schur, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
             computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
             
             # Use SVD to solve
@@ -502,7 +517,7 @@ for t_step in range(N_t):
             
             print(f'Iteration {inner_its}: residual = {err_curr}')
             
-            if err_curr < 1e-4:
+            if err_curr < tol:
                 print('Rphi = rho Converged!')
                 break
         
@@ -516,8 +531,8 @@ for t_step in range(N_t):
         Phi_full[1:-1, 1:-1] = Phi
         Phi_full[1:-1, 0] = Phi[:, -1]
         Phi_full[1:-1, -1] = Phi[:, -1]
-        Phi_full[0, 1:-1] = -25
-        Phi_full[-1, 1:-1] = 25
+        Phi_full[0, 1:-1] = -ac_value
+        Phi_full[-1, 1:-1] = ac_value
         Np_full[1:-1, 1:-1] = Np
         Nm_full[1:-1, 1:-1] = Nm
 
@@ -578,18 +593,27 @@ for t_step in range(N_t):
         U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
         V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 
-        residual_check_RHS = b_Op(u_next, Np_prev, Nm_prev, U_fluid, V_fluid)
+        residual_check_RHS = b_Op(t, u_next, ctxt_BCs, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
         residual_check_AxOp = AxOp(u_next)
         residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
         print(f'New residual Rphi = {residual_check}')
 
-        if residual_check < 1e-4:
+        if residual_check < tol:
             print('Full system converged!')
             break
 
         # update Np_prev and Nm_prev
-        Np_prev = Np.ravel(order='F')
-        Nm_prev = Nm.ravel(order='F')
+        # Np_prev = Np.ravel(order='F')
+        # Nm_prev = Nm.ravel(order='F')
+
+    # fig = plt.figure()
+    # cmap = plt.cm.spring
+    # ax = fig.add_subplot(111, projection="3d")
+    # Phi = ctxt[:Ny*Nx].reshape((Ny, Nx), order='F')
+    # ax.plot_surface(Xint, Yint, Phi, cmap=cmap, edgecolor='none')
+    # ax.set_title(f"Phi, time step {t_step}")
+    # ax.set_xlabel("x"); ax.set_ylabel("y")
+    # plt.show()
 
     # ------------------------------------------------------
     # Plot N_net (PyVista + matplotlib overlay)
@@ -598,19 +622,19 @@ for t_step in range(N_t):
     N_net = (Np - Nm) / 2
 
     radius = 0.25
-    # new_cmap = plt.cm.get_cmap('jet', 256)
-    # new_colors = new_cmap(np.linspace(0.3, 1, 256))
-    # from matplotlib.colors import ListedColormap, Normalize
-    # custom_cmap = ListedColormap(new_colors)
-    custom_cmap = plt.cm.get_cmap('coolwarm', 256)
+    new_cmap = plt.cm.get_cmap('cmr.viola', 256)
+    new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
+    from matplotlib.colors import ListedColormap, Normalize
+    custom_cmap = ListedColormap(new_colors)
 
     # Create structured grid
     grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(N_net))
     grid["N_net"] = N_net.flatten(order='F')
-    grid = grid.clip_box((-2, 2, -2, 2, -1, 1), invert=False)
+    grid = grid.clip_box((-0.3, 0.3, -0.3, 0.3, -1, 1), invert=False)
 
     # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
     plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.set_background('white')
     plotter.add_mesh(
         grid,
         scalars="N_net",
@@ -618,6 +642,7 @@ for t_step in range(N_t):
         clim=[-0.5, 0.5],
         show_edges=False,
         show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
+        lighting=False,
     )
 
     disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
@@ -633,9 +658,14 @@ for t_step in range(N_t):
     # --- Composite in matplotlib ---
     fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
 
+    pv_img = pv_image.copy().astype(float)
+    # Make white pixels transparent
+    white_mask = np.all(pv_img >= 250, axis=2)
+    pv_rgba = np.dstack([pv_img, np.where(white_mask, 0, 255)]).astype(np.uint8)
+
     ax.imshow(
         pv_image,
-        extent=[-2, 2, -2, 2],
+        extent=[-0.3, 0.3, -0.3, 0.3],
         origin='upper',
         aspect='equal',
         zorder=0
@@ -648,78 +678,307 @@ for t_step in range(N_t):
     VFull_masked[mask] = np.nan
     speed = np.sqrt(UFull**2 + VFull**2)
     # 2. Normalize speed to 0-1 range for alpha (Max speed after steady state is 0.8)
-    alpha_map = speed / 0.8
+    alpha_map = speed / np.max(speed)
     # Optional: Apply a minimum alpha so low speed isn't invisible
     alpha_map = 0.2 + 0.8 * alpha_map 
 
     # 4. Apply the alpha mapping to the lines
     # stream.lines is a LineCollection
-    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=3, linewidth=1, arrowsize=1.5, zorder=1)
-    for arrow in ax.get_children():
-        if isinstance(arrow, patches.FancyArrowPatch):
-            arrow.set_alpha(0.3)
-    stream.lines.set_alpha(alpha_map)
+    ax.set_facecolor('white')
+    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+    # for arrow in ax.get_children():
+    #     if isinstance(arrow, patches.FancyArrowPatch):
+    #         arrow.set_alpha(0.3)
+    # stream.lines.set_alpha(alpha_map)
 
     # Add colorbar via matplotlib (matches custom_cmap exactly)
-    sm = plt.cm.ScalarMappable(cmap=custom_cmap)#, norm=Normalize(vmin=1.0, vmax=1.6))
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=-0.5, vmax=0.5))
     sm.set_array([])
     plt.colorbar(sm, ax=ax, label='N_net', shrink=0.8)
 
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
+    circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
+    ax.add_patch(circle_patch)
+
+    ax.set_xlim(-0.3, 0.3)
+    ax.set_ylim(-0.3, 0.3)
     ax.set_aspect('equal')
     ax.set_xlabel('X axis')
     ax.set_ylabel('Y axis')
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(f'img/n_net/n_net_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.savefig(f'img/APS_n_net_ac/APS_n_net_{t_step}.png', dpi=100, bbox_inches='tight')
     plt.close()
 
     # ------------------------------------------------------
-    # Plot N_m
+    # Plot Np (PyVista + matplotlib overlay)
     # ------------------------------------------------------
-    # fig = plt.figure(figsize=(10, 7))
-    # ax = fig.add_subplot(111, projection='3d')
 
-    # surf = ax.plot_surface(
-    #     Xint, Yint, Nm,
-    #     cmap='coolwarm',
-    #     edgecolor='none',
-    #     linewidth=0,
-    #     vmin=0.6,  # Fixed minimum
-    #     vmax=1.4   # Fixed maximum
-    # )
+    radius = 0.25
+    new_cmap = plt.cm.get_cmap('cmr.viola', 256)
+    new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
+    from matplotlib.colors import ListedColormap, Normalize
+    custom_cmap = ListedColormap(new_colors)
 
-    # # Add beige circle patch at origin
-    # theta = np.linspace(0, 2*np.pi, 100)
-    # radius = 0.25
-    # x_circle = radius * np.cos(theta)
-    # y_circle = radius * np.sin(theta)
-    # z_circle = np.full_like(x_circle, 10)  # High z-value to cover the surface
+    # Create structured grid
+    grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(Np))
+    grid["N_p"] = Np.flatten(order='F')
+    grid = grid.clip_box((-0.3, 0.3, -0.3, 0.3, -1, 1), invert=False)
 
-    # ax.plot(x_circle, y_circle, z_circle, color='beige', linewidth=2)
-    # ax.plot_trisurf(x_circle, y_circle, z_circle, color='beige', alpha=1.0, shade=False)
+    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
+    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.set_background('white')
+    plotter.add_mesh(
+        grid,
+        scalars="N_p",
+        cmap=custom_cmap,
+        clim=[0.5, 1.5],
+        show_edges=False,
+        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
+        lighting=False,
+    )
 
-    # fig.colorbar(surf, shrink=0.5, aspect=5)
+    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
+    plotter.add_mesh(disk, color="white", show_edges=False)
 
-    # # Top-down view
-    # ax.view_init(elev=90, azim=-90)
+    plotter.view_xy()
+    # Set camera to EXACTLY the data bounds with zero padding
+    plotter.camera.tight(padding=0.0)
 
-    # # Clean up 3D clutter
-    # ax.set_zticks([])
-    # ax.set_zlabel('')
+    pv_image = plotter.screenshot(None, return_img=True)
+    plotter.close()
 
-    # # Labels
-    # ax.set_xlabel('X axis')
-    # ax.set_ylabel('Y axis')
-    # ax.set_title('Top-Down View of N_m')
-    # ax.grid(False)
+    # --- Composite in matplotlib ---
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
 
-    # plt.xlim(-2, 2)
-    # plt.ylim(-2, 2)
-    # plt.savefig('img/n_m/n_m_' + str(t_step) + '.png', dpi=300, bbox_inches='tight')
-    # plt.close()
+    pv_img = pv_image.copy().astype(float)
+    # Make white pixels transparent
+    white_mask = np.all(pv_img >= 250, axis=2)
+    pv_rgba = np.dstack([pv_img, np.where(white_mask, 0, 255)]).astype(np.uint8)
+
+    ax.imshow(
+        pv_image,
+        extent=[-0.3, 0.3, -0.3, 0.3],
+        origin='upper',
+        aspect='equal',
+        zorder=0
+    )
+
+    mask = X**2 + Y**2 <= radius**2
+    UFull_masked = UFull.copy()
+    VFull_masked = VFull.copy()
+    UFull_masked[mask] = np.nan
+    VFull_masked[mask] = np.nan
+    speed = np.sqrt(UFull**2 + VFull**2)
+    # 2. Normalize speed to 0-1 range for alpha (Max speed after steady state is 0.8)
+    alpha_map = speed / np.max(speed)
+    # Optional: Apply a minimum alpha so low speed isn't invisible
+    alpha_map = 0.2 + 0.8 * alpha_map 
+
+    # 4. Apply the alpha mapping to the lines
+    # stream.lines is a LineCollection
+    ax.set_facecolor('white')
+    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+    # for arrow in ax.get_children():
+    #     if isinstance(arrow, patches.FancyArrowPatch):
+    #         arrow.set_alpha(0.3)
+    # stream.lines.set_alpha(alpha_map)
+
+    # Add colorbar via matplotlib (matches custom_cmap exactly)
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=0.5, vmax=1.5))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='N_p', shrink=0.8)
+
+    circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
+    ax.add_patch(circle_patch)
+
+    ax.set_xlim(-0.3, 0.3)
+    ax.set_ylim(-0.3, 0.3)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'img/APS_n_p_ac/APS_n_p_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.close()
+
+    # ------------------------------------------------------
+    # Plot N_m (PyVista + matplotlib overlay)
+    # ------------------------------------------------------
+
+    radius = 0.25
+    new_cmap = plt.cm.get_cmap('cmr.viola', 256)
+    new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
+    from matplotlib.colors import ListedColormap, Normalize
+    custom_cmap = ListedColormap(new_colors)
+
+    # Create structured grid
+    grid = pv.StructuredGrid(Xint, Yint, np.zeros_like(Nm))
+    grid["N_m"] = Nm.flatten(order='F')
+    grid = grid.clip_box((-0.3, 0.3, -0.3, 0.3, -1, 1), invert=False)
+
+    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
+    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.set_background('white')
+    plotter.add_mesh(
+        grid,
+        scalars="N_m",
+        cmap=custom_cmap,
+        clim=[0.5, 1.5],
+        show_edges=False,
+        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
+        lighting=False,
+    )
+
+    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
+    plotter.add_mesh(disk, color="white", show_edges=False)
+
+    plotter.view_xy()
+    # Set camera to EXACTLY the data bounds with zero padding
+    plotter.camera.tight(padding=0.0)
+
+    pv_image = plotter.screenshot(None, return_img=True)
+    plotter.close()
+
+    # --- Composite in matplotlib ---
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
+
+    pv_img = pv_image.copy().astype(float)
+    # Make white pixels transparent
+    white_mask = np.all(pv_img >= 250, axis=2)
+    pv_rgba = np.dstack([pv_img, np.where(white_mask, 0, 255)]).astype(np.uint8)
+
+    ax.imshow(
+        pv_image,
+        extent=[-0.3, 0.3, -0.3, 0.3],
+        origin='upper',
+        aspect='equal',
+        zorder=0
+    )
+
+    mask = X**2 + Y**2 <= radius**2
+    UFull_masked = UFull.copy()
+    VFull_masked = VFull.copy()
+    UFull_masked[mask] = np.nan
+    VFull_masked[mask] = np.nan
+    speed = np.sqrt(UFull**2 + VFull**2)
+    # 2. Normalize speed to 0-1 range for alpha (Max speed after steady state is 0.8)
+    alpha_map = speed / np.max(speed)
+    # Optional: Apply a minimum alpha so low speed isn't invisible
+    alpha_map = 0.2 + 0.8 * alpha_map 
+
+    # 4. Apply the alpha mapping to the lines
+    # stream.lines is a LineCollection
+    ax.set_facecolor('white')
+    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+    # for arrow in ax.get_children():
+    #     if isinstance(arrow, patches.FancyArrowPatch):
+    #         arrow.set_alpha(0.3)
+    # stream.lines.set_alpha(alpha_map)
+
+    # Add colorbar via matplotlib (matches custom_cmap exactly)
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=0.5, vmax=1.5))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='N_m', shrink=0.8)
+
+    circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
+    ax.add_patch(circle_patch)
+
+    ax.set_xlim(-0.3, 0.3)
+    ax.set_ylim(-0.3, 0.3)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'img/APS_n_m_ac/APS_n_m_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.close()
+
+    # # Save results
+    savemat(f'APS_{t_step}.mat', {
+        'ctxt_Rphi': ctxt,
+        'u_next': u_next,
+        'Xint': Xint,
+        'Yint': Yint,
+        'xib': xib,
+        'yib': yib,
+        'Phi': Phi,
+        'Np': Np,
+        'Nm': Nm,
+        'err': np.array(err),
+        'U_fluid': UFull,
+        'V_fluid': VFull,
+        'P_fluid': Pplot,
+        'lam_X': lam_X,
+        'lam_Y': lam_Y
+    })
+    
+    t_next = t + dt
+
+    # update Phi_BCs
+    Phi_BCs = np.zeros_like(Xint)
+    Phi_BCs[0, :] = (1/dy/dy) * Phi_exact(t_next, xint, Y[0, 0])
+    Phi_BCs[-1, :] += (1/dy/dy) * Phi_exact(t_next, xint, Y[-1, -1])
+    Phi_BCs[:, 0] += (1/dx/dx) * Phi_exact(t_next, X[0, 0], yint)
+    Phi_BCs[:, -1] += (1/dx/dx) * Phi_exact(t_next, X[-1, -1], yint)
+
+    ac_value = beta_BC * np.pi * np.cos(20 * np.pi * t_next)
+    phi_diff = Phi_exact(t_next, Xint, Yint) - Phi_exact(t, Xint, Yint)
+
+    ctxt = np.concatenate([
+        ctxt[:Ny*Nx] + phi_diff.ravel(order='F'),
+        ctxt[Ny*Nx:2*Nx*Ny],
+        ctxt[2*Ny*Nx:3*Nx*Ny],
+        ctxt[3*Nx*Ny:3*Nx*Ny+Nib],
+        ctxt[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib],
+        ctxt[3*Nx*Ny+2*Nib:]
+    ])
+
+    # update Np_prev and Nm_prev
+    Np_prev = Np.ravel(order='F')
+    Nm_prev = Nm.ravel(order='F')
+
+    ctxt_BCs_Schur = np.concatenate([
+        Phi_BCs.ravel(order='F'),
+        Npm_BCs.ravel(order='F'),
+        Npm_BCs.ravel(order='F'),
+        np.zeros(len(xib)) - sigma_bc,
+        #-yib * beta_BC * np.cos(2 * np.pi * t_next),
+        #np.zeros(len(xib)),
+        np.zeros(len(xib)),
+        np.zeros(len(xib))
+    ])
+
+    # Boundary conditions context for full Rphi = rho system
+    ctxt_BCs = np.concatenate([
+        Phi_BCs.ravel(order='F'),
+        Npm_BCs.ravel(order='F'),
+        Npm_BCs.ravel(order='F'),
+        np.zeros(len(xib)) - sigma_bc / delta_layer,
+        #-yib * beta_BC * np.cos(2 * np.pi * t_next) / delta_layer,
+        #np.zeros(len(xib)),
+        np.zeros(len(xib)),
+        np.zeros(len(xib))
+    ])
+
+    # Rebuild dense Schur matrix
+    schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
+    schurRHS = b_Op_Schur(t, ctxt, ctxt_BCs_Schur, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
+    computedRHS = cpeo.schur_rhs_R(dLap, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
+    schurDense = np.zeros((Nib * 3, Nib * 3))
+    for col in range(Nib * 3): 
+        eye_mat = np.zeros(Nib * 3)
+        eye_mat[col] = 1
+        p = eye_mat[0:Nib]
+        p_p = eye_mat[Nib:2*Nib]
+        p_m = eye_mat[2*Nib:3*Nib]
+        res_1, res_2, res_3 = cpeo.apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
+        schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
+
+    # Recompute SVD
+    U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
 
 # check Nu residual 
 Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
@@ -774,8 +1033,8 @@ plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsiz
 plt.xlabel('X-coordinate')
 plt.ylabel('Y-coordinate')
 plt.title('Flow Field Streamline Plot')
-plt.xlim(-2, 2)
-plt.ylim(-2, 2)
+plt.xlim(-0.3, 0.3)
+plt.ylim(-0.3, 0.3)
 plt.grid(True)
 
 cmap = plt.cm.spring
