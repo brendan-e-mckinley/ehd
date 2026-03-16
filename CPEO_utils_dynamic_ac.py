@@ -5,6 +5,10 @@ from scipy.interpolate import BSpline
 from numba import jit
 from sksparse.cholmod import cholesky
 
+def Phi_exact_ac(t, x, y):
+    beta_BC = 7.94
+    return beta_BC * np.cos(20 * np.pi * t) * y + 0 * x
+
 def compute_surface_maxwell_stress(Phi, G_x, G_y, Nx, Ny, Nib, xib, yib, center_x, center_y, Jop):
     G_x_Phi = G_x @ Phi
     G_y_Phi = G_y @ Phi
@@ -397,7 +401,9 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
     return Jphi
 
 #@jit(nopython=True)
-def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
+def Grad_dot_Grad(t, Phi, N_pm, dx, dy, Nx, Ny, N_pm_BC, X, Y):
+    Phi_BC = Phi_exact_ac(t, X, Y)
+
     Phi = Phi.reshape(Ny, Nx).T
     N_pm = N_pm.reshape(Ny, Nx).T
 
@@ -480,7 +486,7 @@ def apply_Ainv_R(dLap, target_vec, delta_layer):
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
-def Build_RHS_rho_ac(ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt):
+def Build_RHS_rho_ac(t, ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -508,7 +514,7 @@ def Build_RHS_rho_ac(ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V, Lap, dL
     Phi_full[1:-1, 1:-1] = Phi_reshaped
     Phi_full[1:-1, 0] = Phi_reshaped[:, -1]
     Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
-    Phi_full[0, :] = ac_value
+    Phi_full[0, :] = -ac_value
     Phi_full[-1, :] = ac_value
     N_p_full[1:-1, 1:-1] = N_p_reshaped
     N_m_full[1:-1, 1:-1] = N_m_reshaped
@@ -555,19 +561,20 @@ def Build_RHS_rho_ac(ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V, Lap, dL
     adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
-    n_p_time_deriv = (alpha_p / dt) * (eye(sz) @ (N_p - N_p_prev))
-    n_m_time_deriv = (alpha_m / dt) * (eye(sz) @ (N_m - N_m_prev))
+    dt_scaled = dt
+    n_p_time_deriv = (alpha_p / dt_scaled) * (eye(sz) @ (N_p - N_p_prev))
+    n_m_time_deriv = (alpha_m / dt_scaled) * (eye(sz) @ (N_m - N_m_prev))
 
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p) + n_p_time_deriv)
-    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m) + n_m_time_deriv)
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(t, Phi, N_p) + n_p_time_deriv)
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(t, Phi, N_m) + n_m_time_deriv)
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
-def Build_RHS_Schur_System_ac(ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V, Lap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt):
+def Build_RHS_Schur_System_ac(t, ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V, Lap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, dt):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -595,7 +602,7 @@ def Build_RHS_Schur_System_ac(ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V
     Phi_full[1:-1, 1:-1] = Phi_reshaped
     Phi_full[1:-1, 0] = Phi_reshaped[:, -1]
     Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
-    Phi_full[0, :] = ac_value
+    Phi_full[0, :] = -ac_value
     Phi_full[-1, :] = ac_value
     N_p_full[1:-1, 1:-1] = N_p_reshaped
     N_m_full[1:-1, 1:-1] = N_m_reshaped
@@ -642,12 +649,13 @@ def Build_RHS_Schur_System_ac(ctxt, ctxt_BCs, ac_value, N_p_prev, N_m_prev, U, V
     adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
-    n_p_time_deriv = (alpha_p / dt) * (eye(sz) @ (N_p - N_p_prev))
-    n_m_time_deriv = (alpha_m / dt) * (eye(sz) @ (N_m - N_m_prev))
+    dt_scaled = dt
+    n_p_time_deriv = (alpha_p / dt_scaled) * (eye(sz) @ (N_p - N_p_prev))
+    n_m_time_deriv = (alpha_m / dt_scaled) * (eye(sz) @ (N_m - N_m_prev))
 
     b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(Phi, N_p) + n_p_time_deriv
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(Phi, N_m) + n_m_time_deriv
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G(t, Phi, N_p) + n_p_time_deriv
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G(t, Phi, N_m) + n_m_time_deriv
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
