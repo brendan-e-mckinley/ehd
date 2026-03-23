@@ -18,12 +18,14 @@ import stokes_solver_utils_fast as stokes
 ###########################
 
 ## Grid parameters
-Nx = 450  # 256; % number of grid points along one direction
+Nx = 128  # 256; % number of grid points along one direction
 L = 2.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
 y = x.copy()
 dy = y[1] - y[0]
+z = x.copy()
+dz = z[1] - z[0]
 
 ## Miscellaneous parameters
 tol = 1e-4
@@ -43,34 +45,59 @@ m = 50
 ## Nodal grid (interior points)
 xint = x[1:-1]
 yint = y[1:-1]
+zint = z[1:-1]
 Ny = len(yint)
 
-X, Y = np.meshgrid(x, y)
-Xint, Yint = np.meshgrid(xint, yint)
+X, Y, Z = np.meshgrid(x, y, z)
+Xint, Yint, Zint = np.meshgrid(xint, yint, zint)
 
-## Staggered grid (horizontal faces for V, vertical faces for U, cell centers for P)
-N_U = Nx * (Ny + 1)
-N_V = (Nx + 1) * Ny
-N_P = (Nx + 1) * (Ny + 1)
-x_trunc = x[1:-1]    # length Nx
-y_trunc = y[1:-1]    # length Ny
-x_mid = x + dx / 2
-y_mid = y + dy / 2
-x_offset = x_mid[:-1]
-y_offset = y_mid[:-1]
+# JUST POISSON FOR NOW
+# ## Staggered grid (horizontal faces for V, vertical faces for U, cell centers for P)
+# N_U = Nx * (Ny + 1)
+# N_V = (Nx + 1) * Ny
+# N_P = (Nx + 1) * (Ny + 1)
+# x_trunc = x[1:-1]    # length Nx
+# y_trunc = y[1:-1]    # length Ny
+# x_mid = x + dx / 2
+# y_mid = y + dy / 2
+# x_offset = x_mid[:-1]
+# y_offset = y_mid[:-1]
 
-UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
-VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
+# UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
+# VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
 ## Immersed boundary
 rad = 0.25
 dth = dx / rad
-theta = np.arange(0, 2*np.pi - dth, dth)
-Nib = len(theta)
-xib = rad * np.cos(theta) 
-yib = rad * np.sin(theta)
-n_x = np.cos(theta)
-n_y = np.sin(theta)
+# Generate mesh grids
+theta_1 = np.arange(0, np.pi + dth, dth)
+theta_2 = np.arange(0, 2 * np.pi + dth, dth)
+
+theta_1, theta_2 = np.meshgrid(theta_1, theta_2)
+
+# Spherical to Cartesian transformation
+xib = rad * np.sin(theta_1) * np.cos(theta_2)
+yib = rad * np.sin(theta_1) * np.sin(theta_2)
+zib = rad * np.cos(theta_1)
+
+# Stack into points (N, 3)
+points = np.vstack((xib.flatten(), yib.flatten(), zib.flatten())).T
+Nib = len(points)
+
+# Normal vectors here
+
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d') # or fig.add_subplot(111, projection='3d')
+
+# Plot the points
+ax.scatter(xib, yib, zib)
+
+# Set labels for clarity
+ax.set_xlabel('X Label')
+ax.set_ylabel('Y Label')
+ax.set_zlabel('Z Label')
+
+plt.show()
 
 #########################
 ######  OPERATORS  ######
@@ -78,7 +105,7 @@ n_y = np.sin(theta)
 
 ## Laplacian operators
 # Staggered laplacians (dirichlet boundary conditions in y, dirichlet boundary conditions in x)
-Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
+# Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
 
 # Nodal laplacian (dirichlet boundary conditions in y, periodic in x)
 e = (1/dy**2) * np.ones(Ny)
