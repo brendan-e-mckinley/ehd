@@ -10,7 +10,7 @@ from scipy.sparse.linalg import splu, eigs, spsolve, gmres, LinearOperator
 from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
-import CPEO_utils as cpeo
+import CPEO_utils_3d as cpeo
 import stokes_solver_utils_fast as stokes
 
 ###########################
@@ -18,9 +18,15 @@ import stokes_solver_utils_fast as stokes
 ###########################
 
 ## Grid parameters
-Nx = 128  # 256; % number of grid points along one direction
+Nx = 64  # 256; % number of grid points along one direction
 L = 2.0 * np.pi 
-x = np.linspace(-L/2, L/2, Nx+2) 
+x_lo = -L/2
+x_hi = L/2
+y_lo = x_lo
+y_hi = x_hi
+z_lo = x_lo
+z_hi = x_hi
+x = np.linspace(x_lo, x_hi, Nx+2) 
 dx = x[1] - x[0]
 y = x.copy()
 dy = y[1] - y[0]
@@ -47,6 +53,7 @@ xint = x[1:-1]
 yint = y[1:-1]
 zint = z[1:-1]
 Ny = len(yint)
+Nz = len(zint)
 
 X, Y, Z = np.meshgrid(x, y, z)
 Xint, Yint, Zint = np.meshgrid(xint, yint, zint)
@@ -67,37 +74,37 @@ Xint, Yint, Zint = np.meshgrid(xint, yint, zint)
 # VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
 ## Immersed boundary
-rad = 0.25
-dth = dx / rad
-# Generate mesh grids
-theta_1 = np.arange(0, np.pi + dth, dth)
-theta_2 = np.arange(0, 2 * np.pi + dth, dth)
+# rad = 0.25
+# dth = dx / rad
+# # Generate mesh grids
+# theta_1 = np.arange(0, np.pi + dth, dth)
+# theta_2 = np.arange(0, 2 * np.pi + dth, dth)
 
-theta_1, theta_2 = np.meshgrid(theta_1, theta_2)
+# theta_1, theta_2 = np.meshgrid(theta_1, theta_2)
 
-# Spherical to Cartesian transformation
-xib = rad * np.sin(theta_1) * np.cos(theta_2)
-yib = rad * np.sin(theta_1) * np.sin(theta_2)
-zib = rad * np.cos(theta_1)
+# # Spherical to Cartesian transformation
+# xib = rad * np.sin(theta_1) * np.cos(theta_2)
+# yib = rad * np.sin(theta_1) * np.sin(theta_2)
+# zib = rad * np.cos(theta_1)
 
-# Stack into points (N, 3)
-points = np.vstack((xib.flatten(), yib.flatten(), zib.flatten())).T
-Nib = len(points)
+# # Stack into points (N, 3)
+# points = np.vstack((xib.flatten(), yib.flatten(), zib.flatten())).T
+# Nib = len(points)
 
-# Normal vectors here
+# # Normal vectors here
 
-fig = plt.figure()
-ax = fig.add_subplot(projection='3d') # or fig.add_subplot(111, projection='3d')
+# fig = plt.figure()
+# ax = fig.add_subplot(projection='3d') # or fig.add_subplot(111, projection='3d')
 
-# Plot the points
-ax.scatter(xib, yib, zib)
+# # Plot the points
+# ax.scatter(xib, yib, zib)
 
-# Set labels for clarity
-ax.set_xlabel('X Label')
-ax.set_ylabel('Y Label')
-ax.set_zlabel('Z Label')
+# # Set labels for clarity
+# ax.set_xlabel('X Label')
+# ax.set_ylabel('Y Label')
+# ax.set_zlabel('Z Label')
 
-plt.show()
+# plt.show()
 
 #########################
 ######  OPERATORS  ######
@@ -108,113 +115,143 @@ plt.show()
 # Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
 
 # Nodal laplacian (dirichlet boundary conditions in y, periodic in x)
-e = (1/dy**2) * np.ones(Ny)
-D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
+# e = (1/dy**2) * np.ones(Ny)
+# D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
+# I_nx = eye(Nx)
+# I_ny = eye(Ny)
+# Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
+# dLap = cholesky(Lap) # Cholesky decomposition
+
+# 1D Laplacian for Dirichlet x
+e_x = (1/dx**2) * np.ones(Nx)
+D2_x = spdiags([e_x, -2*e_x, e_x], [-1, 0, 1], Nx, Nx).toarray()
+
+# 1D Laplacian for Dirichlet y
+e_y = (1/dy**2) * np.ones(Ny)
+D2_y = spdiags([e_y, -2*e_y, e_y], [-1, 0, 1], Ny, Ny).toarray()
+
+# 1D Laplacian for Dirichlet z
+e_z = (1/dz**2) * np.ones(Nz)
+D2_z = spdiags([e_z, -2*e_z, e_z], [-1, 0, 1], Nz, Nz).toarray()
+
 I_nx = eye(Nx)
 I_ny = eye(Ny)
-Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
-dLap = cholesky(Lap) # Cholesky decomposition
+I_nz = eye(Nz)  # Exclude Dirichlet boundaries in z
 
-## Gradient/divergence operators
-def periodic_centered_diff_x(Nx, dx):
-    e = np.ones(Nx)
-    D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Nx, Nx), format='lil') / dx
-    D[0, -1] = -0.5/dx     # wrap: f_{i-1} at i=0 -> f_{N-1}
-    D[-1, 0] = 0.5/dx      # wrap: f_{i+1} at i=N-1 -> f_{0}
-    return D.tocsr()
+# 3D Laplacian: periodic in x and y, Dirichlet in z
+Lap =  (kron(I_nz, kron(D2_x, I_ny)) +
+        kron(I_nz, kron(I_nx, D2_y)) +
+        kron(D2_z, kron(I_nx, I_ny)))
 
-def centered_diff_y(Ny, dy):
-    e = np.ones(Ny)
-    D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Ny, Ny), format='lil') / dy
-    return D.tocsr()
+# # Full gradient operators ((Nx + 2) * (Ny + 2)) including boundaries
+# D_x_full = diags(
+#     [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
+#     offsets=[-1, 1],
+#     shape=(Nx, Nx + 2)
+# ).tocsr()
+# D_y_full = diags(
+#     [-0.5/dy * np.ones(Ny),  0.5/dy * np.ones(Ny)],
+#     offsets=[-1,  1],
+#     shape=(Ny, Ny + 2),
+#     format='csr'
+# )
+# D_z_full = diags(
+#     [-0.5/dz * np.ones(Nz),  0.5/dy * np.ones(Nz)],
+#     offsets=[-1,  1],
+#     shape=(Nz, Nz + 2),
+#     format='csr'
+# )
+# G_x_full = kron(kron(D_x_full, eye(Ny + 2, format='csr'), format='csr'), eye(Nz + 2, format='csr'))
+# G_y_full = kron(kron(eye(Nx + 2, format='csr'), D_y_full, format='csr'), eye(Nz + 2, format='csr'))
+# G_z_full = kron(eye(Nx + 2, format='csr'), kron(eye(Nz + 2, format='csr'), D_z_full, format='csr'))
 
-# Full gradient operators ((Nx + 2) * (Ny + 2)) including boundaries
-D_x_full = diags(
-    [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
-    offsets=[-1, 1],
-    shape=(Nx, Nx + 2)
-).tocsr()
-D_y_full = diags(
-    [-0.5/dy * np.ones(Ny),  0.5/dy * np.ones(Ny)],
-    offsets=[-1,  1],
-    shape=(Ny, Ny + 2),
-    format='csr'
-)
-G_x_full = kron(D_x_full, eye(Ny + 2, format='csr'), format='csr')
-G_y_full = kron(eye(Nx + 2, format='csr'), D_y_full,format='csr')
+# # Nodal gradient operators (internal points only, excludes boundaries)
+# D_x_nodes = diags(
+#     [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
+#     offsets=[-1, 1],
+#     shape=(Nx, Nx + 2),
+#     format='csr'
+# )
 
-# Nodal gradient operators (internal points only, excludes boundaries)
-D_x_nodes = diags(
-    [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
-    offsets=[-1, 1],
-    shape=(Nx, Nx + 2),
-    format='csr'
-)
+# D_y_nodes = diags(
+#     [-0.5/dy * np.ones(Ny), 0.5/dy * np.ones(Ny)],
+#     offsets=[-1,  1],
+#     shape=(Ny, Ny + 2),
+#     format='csr'
+# )
+# S_y = eye(Ny + 2, format='csr')[1:-1, :]   # (Ny) × (Ny+2)
+# S_x = eye(Nx + 2, format='csr')[1:-1, :]   # (Nx) × (Nx+2)
+# G_x_nodes = kron(D_x_nodes, S_y, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
+# G_y_nodes = kron(S_x, D_y_nodes, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
 
-D_y_nodes = diags(
-    [-0.5/dy * np.ones(Ny), 0.5/dy * np.ones(Ny)],
-    offsets=[-1,  1],
-    shape=(Ny, Ny + 2),
-    format='csr'
-)
-S_y = eye(Ny + 2, format='csr')[1:-1, :]   # (Ny) × (Ny+2)
-S_x = eye(Nx + 2, format='csr')[1:-1, :]   # (Nx) × (Nx+2)
-G_x_nodes = kron(D_x_nodes, S_y, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
-G_y_nodes = kron(S_x, D_y_nodes, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
+# # Staggered gradient and divergence operators
+# G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
 
-# Staggered gradient and divergence operators
-G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
+# ## Prefactor big Stokes operator
+# Z_UV = csr_matrix((N_U, N_V))
+# Z_VU = csr_matrix((N_V, N_U))
+# Z_PP = csr_matrix((N_P, N_P))
 
-## Prefactor big Stokes operator
-Z_UV = csr_matrix((N_U, N_V))
-Z_VU = csr_matrix((N_V, N_U))
-Z_PP = csr_matrix((N_P, N_P))
+# # Saddle point system
+# big_L = bmat([
+#     [Lap_U, Z_VU,  -G_x_staggered],
+#     [Z_UV,  Lap_V, -G_y_staggered],
+#     [D_x_staggered,   D_y_staggered,   Z_PP] 
+# ], format='csr')
 
-# Saddle point system
-big_L = bmat([
-    [Lap_U, Z_VU,  -G_x_staggered],
-    [Z_UV,  Lap_V, -G_y_staggered],
-    [D_x_staggered,   D_y_staggered,   Z_PP] 
-], format='csr')
-
-stokes_LU = splu(big_L)
+# stokes_LU = splu(big_L)
 
 #############################################
 #######  BOUNDARY/INITIAL CONDITIONS  #######
 #############################################
 
 ## Exact solutions
-def Phi_exact(x, y):
-    return beta_BC * y + 0 * x
-def Npm_exact(x, y):
+def Phi_exact(x, y, z):
+    return beta_BC * z + 0 * x + 0 * y
+def Npm_exact(x, y, z):
     return 0 * x + 1.0
 
 # Compute exact solutions
-Phi_BC = Phi_exact(X, Y)
-N_pm_BC = Npm_exact(X, Y)
+Phi_BC = Phi_exact(X, Y, Z)
+N_pm_BC = Npm_exact(X, Y, Z)
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(Xint)
 Npm_BCs = np.zeros_like(Xint)
 
-Phi_BCs[0, :] = (1/dy/dy) * Phi_exact(xint, Y[0, 0])
-Phi_BCs[-1, :] += (1/dy/dy) * Phi_exact(xint, Y[-1, -1])
-Phi_BCs[:, 0] += (1/dx/dx) * Phi_exact(X[0, 0], yint)
-Phi_BCs[:, -1] += (1/dx/dx) * Phi_exact(X[-1, -1], yint)
+## Dirichlet boundaries in the far field 
+# z = z_lo and z = z_hi (bottom and top faces)
+Phi_BCs[0, :, :] = (1/dz/dz) * Phi_exact(Xint[0, :, :], Yint[0, :, :], Z[0, 0, 0])  # z = z_lo
+Phi_BCs[-1, :, :] += (1/dz/dz) * Phi_exact(Xint[-1, :, :], Yint[-1, :, :], Z[-1, -1, -1])  # z = z_hi
 
-Npm_BCs[0, :] = (1/dy/dy) * Npm_exact(xint, Y[0, 0])
-Npm_BCs[-1, :] += (1/dy/dy) * Npm_exact(xint, Y[-1, -1])
-Npm_BCs[:, 0] += (1/dx/dx) * Npm_exact(X[0, 0], yint)
-Npm_BCs[:, -1] += (1/dx/dx) * Npm_exact(X[-1, -1], yint)
+# x = x_lo and x = x_hi (left and right faces)
+Phi_BCs[:, :, 0] += (1/dx/dx) * Phi_exact(X[0, 0, 0], Yint[:, :, 0], Zint[:, :, 0])  # x = x_lo
+Phi_BCs[:, :, -1] += (1/dx/dx) * Phi_exact(X[-1, -1, -1], Yint[:, :, -1], Zint[:, :, -1])  # x = x_hi
+
+# y = y_lo and y = y_hi (front and back faces)
+Phi_BCs[:, 0, :] += (1/dy/dy) * Phi_exact(Xint[:, 0, :], Y[0, 0, 0], Zint[:, 0, :])  # y = y_lo
+Phi_BCs[:, -1, :] += (1/dy/dy) * Phi_exact(Xint[:, -1, :], Y[-1, -1, -1], Zint[:, -1, :])  # y = y_hi
+
+# z = z_lo and z = z_hi (bottom and top faces)
+Npm_BCs[0, :, :] = (1/dz/dz) * Npm_exact(Xint[0, :, :], Yint[0, :, :], Z[0, 0, 0])  # z = z_lo
+Npm_BCs[-1, :, :] += (1/dz/dz) * Npm_exact(Xint[-1, :, :], Yint[-1, :, :], Z[-1, -1, -1])  # z = z_hi
+
+# x = x_lo and x = x_hi (left and right faces)
+Npm_BCs[:, :, 0] += (1/dx/dx) * Npm_exact(X[0, 0, 0], Yint[:, :, 0], Zint[:, :, 0])  # x = x_lo
+Npm_BCs[:, :, -1] += (1/dx/dx) * Npm_exact(X[-1, -1, -1], Yint[:, :, -1], Zint[:, :, -1])  # x = x_hi
+
+# y = y_lo and y = y_hi (front and back faces)
+Npm_BCs[:, 0, :] += (1/dy/dy) * Npm_exact(Xint[:, 0, :], Y[0, 0, 0], Zint[:, 0, :])  # y = y_lo
+Npm_BCs[:, -1, :] += (1/dy/dy) * Npm_exact(Xint[:, -1, :], Y[-1, -1, -1], Zint[:, -1, :])  # y = y_hi
 
 # Boundary conditions context for Schur solve of Rphi = rho 
 ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    np.zeros(len(xib)) - (sigma_bc),
-    np.zeros(len(xib)),
-    np.zeros(len(xib))
+    # np.zeros(len(xib)) - (sigma_bc),
+    # np.zeros(len(xib)),
+    # np.zeros(len(xib))
 ])
 
 # Boundary conditions context for full Rphi = rho system
@@ -222,106 +259,218 @@ ctxt_BCs = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    np.zeros(len(xib)) - (sigma_bc/delta_layer),
-    np.zeros(len(xib)),
-    np.zeros(len(xib))
+    # np.zeros(len(xib)) - (sigma_bc/delta_layer),
+    # np.zeros(len(xib)),
+    # np.zeros(len(xib))
 ])
 
-## Initial conditions for Rphi = rho system
-ld = loadmat('BC_run_N_300_r0p25.mat')
-METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
+# ## Initial conditions for Rphi = rho system
+# ld = loadmat('BC_run_N_300_r0p25.mat')
+# METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
-Ny_ld = int(ld['Ny'][0, 0])
-Nx_ld = int(ld['Nx'][0, 0])
-Nib_ld = int(ld['Nib'][0, 0])
-sz = Ny_ld * Nx_ld
+# Ny_ld = int(ld['Ny'][0, 0])
+# Nx_ld = int(ld['Nx'][0, 0])
+# Nib_ld = int(ld['Nib'][0, 0])
+# sz = Ny_ld * Nx_ld
 
-ctxt_ld = ld['ctxt'].ravel(order='F')
-Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')
-N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
-N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
-Q_ld = ctxt_ld[3*sz:3*sz+Nib_ld]
-Q_p_ld = ctxt_ld[3*sz+Nib_ld:3*sz+2*Nib_ld]
-Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
+# ctxt_ld = ld['ctxt'].ravel(order='F')
+# Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')
+# N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
+# N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
+# Q_ld = ctxt_ld[3*sz:3*sz+Nib_ld]
+# Q_p_ld = ctxt_ld[3*sz+Nib_ld:3*sz+2*Nib_ld]
+# Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
-Xint_ld = ld['Xint']
-Yint_ld = ld['Yint']
-theta_ld = ld['theta'].ravel()
+# Xint_ld = ld['Xint']
+# Yint_ld = ld['Yint']
+# theta_ld = ld['theta'].ravel()
 
-# Extract the coordinate vectors from the loaded grid
-x_ld = Xint_ld[0, :]  # First row gives x-coordinates
-y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
+# # Extract the coordinate vectors from the loaded grid
+# x_ld = Xint_ld[0, :]  # First row gives x-coordinates
+# y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
-# Interpolate initial guesses
-Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
-N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
-Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
-Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
+# # Interpolate initial guesses
+# Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+# N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+# N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+# Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
+# Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
+# Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
 ctxt = np.concatenate([
-    Phi_init.ravel(order='F'),
-    N_p_init.ravel(order='F'),
-    N_m_init.ravel(order='F'),
-    Q_init,
-    Q_p_init,
-    Q_m_init
+    np.zeros_like(Xint).ravel(order='F'),
+    np.zeros_like(Xint).ravel(order='F'),
+    np.zeros_like(Xint).ravel(order='F'),
+    # np.zeros(Nib),
+    # np.zeros(Nib),
+    # np.zeros(Nib)
 ])
 
 Phi = ctxt[:Ny*Nx].reshape((Ny, Nx), order='F')
 Np = ctxt[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
 Nm = ctxt[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
 
-## Boundary conditions for Nu = F system
-f_bc_mat = np.zeros((Ny + 1, Nx))
-g_bc_mat = np.zeros((Ny, Nx + 1))
-h_bc = np.zeros((Ny + 1, Nx + 1)).ravel(order='F')
-z_x = np.zeros(Nib)
-z_y = np.zeros(Nib)
+# ## Boundary conditions for Nu = F system
+# f_bc_mat = np.zeros((Ny + 1, Nx))
+# g_bc_mat = np.zeros((Ny, Nx + 1))
+# h_bc = np.zeros((Ny + 1, Nx + 1)).ravel(order='F')
+# z_x = np.zeros(Nib)
+# z_y = np.zeros(Nib)
 
-## Initial conditions for Nu = F system
-U_fluid = np.zeros(Nx * Ny)
-V_fluid = np.zeros(Nx * Ny)
+# ## Initial conditions for Nu = F system
+# U_fluid = np.zeros(Nx * Ny)
+# V_fluid = np.zeros(Nx * Ny)
 
 ###############################
 #######  SETUP METHODS  #######
 ###############################
 
-@jit(nopython=True)
-def delta_a(r, a):
-    return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
+# @jit(nopython=True)
+# def delta_a(r, a):
+#     return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
 
-@jit(nopython=True)
-def delta(r):
-    return delta_a(r, 1.2*dx)
+# @jit(nopython=True)
+# def delta(r):
+#     return delta_a(r, 1.2*dx)
 
-@jit(nopython=True)
-def delta_r(r):
-    return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
+# @jit(nopython=True)
+# def delta_r(r):
+#     return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
 
-def Sop_prime(q):
-    return cpeo.spreadQ_prime(Xint, Yint, xib, yib, n_x, n_y, q, delta_r, cut)
+# def Sop_prime(q):
+#     return cpeo.spreadQ_prime(Xint, Yint, xib, yib, n_x, n_y, q, delta_r, cut)
 
-def Jop(P):
-    return cpeo.interpPhi(Xint, Yint, xib, yib, P, delta, cut)
+# def Jop(P):
+#     return cpeo.interpPhi(Xint, Yint, xib, yib, P, delta, cut)
 
-def Jop_prime(P):
-    return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
+# def Jop_prime(P):
+#     return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
 
-def G_d_G(Phi, N_pm):
-    return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
+def G_d_G_3d(Phi, N_pm):
+    return cpeo.Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz, Phi_BC, N_pm_BC)
 
-def b_Op_Schur(ctxt, U_fluid, V_fluid):
-    return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+# def G_d_G(Phi, N_pm):
+#     return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
-def b_Op(ctxt, U_fluid, V_fluid):
-    return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+def b_Op_3d(ctxt):
+    print(f"b_Op_3d input norm: {np.linalg.norm(ctxt)}")
+    return cpeo.Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G_3d, delta_layer, Nx, Ny, Nz, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
-def AxOp(ctxt):
-    return cpeo.Constrained_Lap(ctxt, ctxt, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
+# def b_Op_Schur(ctxt, U_fluid, V_fluid):
+#     return cpeo.Build_RHS_Schur_System(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
-delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
+# def b_Op(ctxt, U_fluid, V_fluid):
+#     return cpeo.Build_RHS_rho(ctxt, ctxt_BCs, U_fluid, V_fluid, G_x_nodes, G_y_nodes, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+
+def AxOp_3d(ctxt):
+    return cpeo.Constrained_Lap_3d(ctxt, delta_layer, Nx, Ny, Nz, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+def AxLinOp_3d(shape):
+    def mv(vec):
+        return AxOp_3d(vec)
+        
+    return LinearOperator((shape, shape), matvec=mv)
+
+# def AxOp(ctxt):
+#     return cpeo.Constrained_Lap(ctxt, ctxt, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
+
+# delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
+
+# CHECK OPERATORS FOR 3D
+# RHS = b_Op_3d(ctxt)
+# LHS = AxOp_3d(ctxt)
+
+# MANUFACTURED SOLUTION
+phi_test = np.sin(Xint) * np.sin(Yint) * np.sin(Zint)
+
+# test lap
+lap_phi = (-3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)).ravel(order='F')
+lap_phi_num = (Lap @ phi_test.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
+lap_phi_num_base = np.zeros_like(X)
+lap_phi_num_base[1:-1, 1:-1, 1:-1] = lap_phi_num
+lap_phi_num = lap_phi_num_base.ravel(order='F')
+
+residual_phi = np.linalg.norm(lap_phi_num - lap_phi) / np.linalg.norm(lap_phi)
+print(f'Residual Phi: {residual_phi}')
+
+# MANUFACTURED SOLUTION
+phi_test = 5 + np.sin(Xint) * np.sin(Yint) * np.sin(Zint)
+n_p_test = 5 + np.sin(Xint) * np.sin(Yint) * np.sin(Zint)
+
+# Analytical solution (interior points)
+gdg = (np.cos(Xint)**2 * np.sin(Yint)**2 * np.sin(Zint)**2 +
+       np.sin(Xint)**2 * np.cos(Yint)**2 * np.sin(Zint)**2 +
+       np.sin(Xint)**2 * np.sin(Yint)**2 * np.cos(Zint)**2).ravel(order='F')
+
+# Numerical solution
+gdg_num = G_d_G_3d(phi_test.ravel(order='F'), n_p_test.ravel(order='F'))
+
+# Residual (interior points only)
+residual = np.linalg.norm(gdg_num - gdg) / np.linalg.norm(gdg)
+print(f'Residual: {residual}')
+
+## Test basic system 
+RHS = b_Op_3d(ctxt)
+shape = 3 * Nx * Ny * Nz
+AxOp = AxLinOp_3d(shape)
+G_u_n, _ = gmres(AxOp, RHS, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
+
+# initialize objects for anderson
+DU = np.full((len(RHS), m), np.nan)
+DG = np.full((len(RHS), m), np.nan)
+u_n = ctxt.copy()
+u_next = G_u_n.copy()
+G_u_next = G_u_n.copy()
+err = []
+
+# Anderson acceleration loop
+for inner_its in range(100000):
+    RHS = b_Op_3d(u_next)
+    G_u_next, _ = gmres(AxOp, RHS, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
+
+    m_n = min(m, inner_its + 1)
+    
+    # Store differences
+    if inner_its < m:
+        DU[:, inner_its] = u_next - u_n
+        DG[:, inner_its] = G_u_next - G_u_n
+    else:
+        DU = np.roll(DU, -1, axis=1)
+        DG = np.roll(DG, -1, axis=1)
+        DU[:, -1] = u_next - u_n
+        DG[:, -1] = G_u_next - G_u_n
+    
+    f_n = G_u_next - u_next
+    DF = DG[:, :m_n] - DU[:, :m_n]
+    print(f"Norm of f_n: {np.linalg.norm(f_n)}")
+    
+    # QR decomposition
+    gamma, residuals, rank, s = lstsq(DF, f_n)
+    print(f"Norm of gamma: {np.linalg.norm(gamma)}")
+    
+    u_n = u_next.copy()
+    G_u_n = G_u_next.copy()
+    
+    u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
+    print(f"Change in u_next: {np.linalg.norm(u_next - u_n)}")
+    
+    # Extract solution components
+    index = Nx * Ny * Nz
+    Phi = u_next[:index].reshape((Nz, Ny, Nx), order='F')
+    Np = u_next[index:2*index].reshape((Nz, Ny, Nx), order='F')
+    Nm = u_next[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
+    
+    # Check convergence
+    LHS = AxOp_3d(u_next)
+    err_curr = np.linalg.norm(LHS - RHS) / np.linalg.norm(RHS)
+    print(f'Residual: {err_curr}')
+    err.append(err_curr)
+    
+    print(f'Iteration {inner_its}: residual = {err_curr}')
+    
+    if err_curr < 1e-4:
+        print('Rphi = rho Converged!')
+        break
 
 ##########################
 #####  SOLVER SETUP  #####

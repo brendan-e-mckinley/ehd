@@ -4,6 +4,7 @@ from scipy.sparse.linalg import spsolve, gmres, LinearOperator
 from scipy.interpolate import BSpline
 from numba import jit
 from sksparse.cholmod import cholesky
+import ib_3d as amr_solve
 
 def compute_surface_maxwell_stress(Phi, G_x, G_y, Nx, Ny, Nib, xib, yib, center_x, center_y, Jop):
     G_x_Phi = G_x @ Phi
@@ -416,6 +417,79 @@ def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
     return G_d_G.ravel(order='F')
 
+def Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz, Phi_BC, N_pm_BC):
+    # Reshape to 3D
+    Phi = Phi.reshape(Nz, Ny, Nx)
+    N_pm = N_pm.reshape(Nz, Ny, Nx)
+
+    # Apply boundary conditions and compute gradients in z-direction
+    Phi_BC_z = np.concatenate([
+        Phi_BC[0, 1:-1, 1:-1].reshape(1, Ny, Nx),
+        Phi,
+        Phi_BC[-1, 1:-1, 1:-1].reshape(1, Ny, Nx)
+    ], axis=0)
+    Phi_z = (0.5/dz) * (Phi_BC_z[2:, :, :] - Phi_BC_z[:-2, :, :])
+
+    N_pm_BC_z = np.concatenate([
+        N_pm_BC[0, 1:-1, 1:-1].reshape(1, Ny, Nx),
+        N_pm,
+        N_pm_BC[-1, 1:-1, 1:-1].reshape(1, Ny, Nx)
+    ], axis=0)
+    N_pm_z = (0.5/dz) * (N_pm_BC_z[2:, :, :] - N_pm_BC_z[:-2, :, :])
+
+    # Apply boundary conditions and compute gradients in y-direction
+    Phi_BC_y = np.concatenate([
+        Phi_BC[1:-1, 0, 1:-1].reshape(Nz, 1, Nx),
+        Phi,
+        Phi_BC[1:-1, -1, 1:-1].reshape(Nz, 1, Nx)
+    ], axis=1)
+    Phi_y = (0.5/dy) * (Phi_BC_y[:, 2:, :] - Phi_BC_y[:, :-2, :])
+
+    N_pm_BC_y = np.concatenate([
+        N_pm_BC[1:-1, 0, 1:-1].reshape(Nz, 1, Nx),
+        N_pm,
+        N_pm_BC[1:-1, -1, 1:-1].reshape(Nz, 1, Nx)
+    ], axis=1)
+    N_pm_y = (0.5/dy) * (N_pm_BC_y[:, 2:, :] - N_pm_BC_y[:, :-2, :])
+
+    # Apply boundary conditions and compute gradients in x-direction
+    Phi_BC_x = np.concatenate([
+        Phi_BC[1:-1, 1:-1, 0].reshape(Nz, Ny, 1),
+        Phi,
+        Phi_BC[1:-1, 1:-1, -1].reshape(Nz, Ny, 1)
+    ], axis=2)
+    Phi_x = (0.5/dx) * (Phi_BC_x[:, :, 2:] - Phi_BC_x[:, :, :-2])
+
+    N_pm_BC_x = np.concatenate([
+        N_pm_BC[1:-1, 1:-1, 0].reshape(Nz, Ny, 1),
+        N_pm,
+        N_pm_BC[1:-1, 1:-1, -1].reshape(Nz, Ny, 1)
+    ], axis=2)
+    N_pm_x = (0.5/dx) * (N_pm_BC_x[:, :, 2:] - N_pm_BC_x[:, :, :-2])
+
+    # Compute the dot product
+    G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y + N_pm_z * Phi_z
+
+    return G_d_G.ravel(order='F')
+
+def Constrained_Lap_3d(ctxt, delta_layer, Nx, Ny, Nz, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    A_x_Ctx = np.zeros_like(ctxt)
+    
+    sz = Nx * Ny * Nz
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    
+    dl2 = delta_layer**2
+
+    solved_1 = amr_solve.solve_poisson((0.5*N_p - 0.5*N_m).reshape(Nz, Ny, Nx), x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+
+    A_x_Ctx[:sz] = dl2 * Phi + solved_1
+    A_x_Ctx[sz:2*sz] = N_p
+    A_x_Ctx[2*sz:3*sz] = N_m
+    
+    return A_x_Ctx
+
 def Constrained_Lap(ctxt, ctxt_prev, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
     A_x_Ctx = np.zeros_like(ctxt)
     
@@ -479,6 +553,44 @@ def apply_Ainv_R(dLap, target_vec, delta_layer):
     result_vec_1 = -dLap.solve_A(rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
+
+def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    dl2 = delta_layer**2
+    sz = Nx * Ny * Nz
+    
+    b_Ctx = np.zeros_like(ctxt)
+    
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+
+    # flatten/reshape these correctly 
+    Phi_reshaped = Phi.reshape((Nz, Ny, Nx), order='F')
+    N_p_reshaped = N_p.reshape((Nz, Ny, Nx), order='F')
+    N_m_reshaped = N_m.reshape((Nz, Ny, Nx), order='F')
+
+    computed_lap = Lap @ Phi
+    computed_lap = computed_lap + Phi_BC
+    
+    alpha_p = 1
+    alpha_m = 1
+
+    # (advection terms when we get there)
+
+    # rhs
+    rhs_1 = (-dl2 * Phi_BC).reshape((Nz, Ny, Nx), order='F')
+    rhs_2 = (-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p)).reshape((Nz, Ny, Nx), order='F')
+    rhs_3 = (N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m)).reshape((Nz, Ny, Nx), order='F')
+
+    b_Ctx[:sz] =  amr_solve.solve_poisson(rhs_1, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[sz:2*sz] = amr_solve.solve_poisson(rhs_2, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[2*sz:3*sz] = amr_solve.solve_poisson(rhs_3, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+
+    return b_Ctx
 
 def Build_RHS_rho(ctxt, ctxt_BCs, U, V, G_x_full, G_y_full, Lap, dLap, G_d_G, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
