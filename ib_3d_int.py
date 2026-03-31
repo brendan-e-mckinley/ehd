@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import amrex_poisson_3d
 
-def solve_poisson(rhs, bcs, x_lo, x_hi,
+def solve_poisson(rhs_int, bcs, x_lo, x_hi,
                         y_lo, y_hi,
                         z_lo, z_hi, refine_radius):
     
@@ -28,9 +28,12 @@ def solve_poisson(rhs, bcs, x_lo, x_hi,
         print(f"  Refinement ratio: {ref_ratio}x")
         print(f"  Effective resolution in center: {coarse_res*ref_ratio}³")
         
+        full_rhs = bcs.copy()
+        full_rhs[1:-2, 1:-2, 1:-2] = rhs_int
+        
         # Solve Poisson equation with AMR
         phi_numerical = amrex_poisson_3d.solve_poisson_adaptive(
-            rhs,
+            full_rhs,
             bcs, 
             x_lo=x_lo, x_hi=x_hi,
             y_lo=y_lo, y_hi=y_hi,
@@ -170,9 +173,16 @@ if __name__ == "__main__":
     y = np.linspace(y_lo, y_hi, ny)
     z = np.linspace(z_lo, z_hi, nz)
 
-    xint = x[1:-1]
-    yint = y[1:-1]
-    zint = z[1:-1]
+    x_int_lo = x[1]
+    y_int_lo = y[1]
+    z_int_lo = z[1]
+    x_int_hi = x[-2]
+    y_int_hi = y[-2]
+    z_int_hi = z[-2]
+
+    xint = x[1:-2]
+    yint = y[1:-2]
+    zint = z[1:-2]
     
     # Create 3D meshgrid
     Xint, Yint, Zint = np.meshgrid(xint, yint, zint, indexing='ij')
@@ -184,10 +194,10 @@ if __name__ == "__main__":
     
     # For -∇²phi = rhs, we have:
     # -∇²[sin(x)sin(y)sin(z)] = 3*sin(x)*sin(y)*sin(z)
-    rhs = -3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)
-    boundary_values = np.zeros_like(X) + 20  # or whatever your outer BC is
+    rhs_int = -3.0 * np.sin(Xint) * np.sin(Yint) * np.sin(Zint)
+    boundary_values = np.zeros_like(X) + 20
     
-    phi_numerical = solve_poisson(rhs, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, refine_radius)
+    phi_numerical = solve_poisson(rhs_int, boundary_values, x_int_lo, x_int_hi, y_int_lo, y_int_hi, z_int_lo, z_int_hi, refine_radius)
 
     print(f"\nSolution shape: {phi_numerical.shape}")
     print(f"Solution min/max: {phi_numerical.min():.6f} / {phi_numerical.max():.6f}")

@@ -108,21 +108,27 @@ BoxArray make_refined_ba(const Geometry& coarse_geom, const Box& coarse_domain,
     return BoxArray(bl);
 }
 
-py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
-    double x_lo = 0.0, double x_hi = 2.0*M_PI,
-    double y_lo = 0.0, double y_hi = 2.0*M_PI,
-    double z_lo = 0.0, double z_hi = 2.0*M_PI,
-    double tol = 1e-10,
-    int nghost = 1,
-    bool fortran_order_rhs = false)
+py::array_t<double> solve_poisson_adaptive(
+    py::array_t<double> rhs_in,
+    py::array_t<double> boundary_values,
+    double x_lo, double x_hi,
+    double y_lo, double y_hi,
+    double z_lo, double z_hi,
+    double tol,
+    int nghost,
+    bool fortran_order_rhs,
+    bool fortran_order_bc)
 {
     check_3d_array(rhs_in);
-    py::buffer_info buf = rhs_in.request();
+    check_3d_array(boundary_values);
+
+    py::buffer_info rhs_buf = rhs_in.request();
+    py::buffer_info bc_buf = boundary_values.request();
 
     // Assuming shape is (nz, ny, nx) for C-order: [k, j, i]
-    int nx = static_cast<int>(buf.shape[2]);
-    int ny = static_cast<int>(buf.shape[1]);
-    int nz = static_cast<int>(buf.shape[0]);
+    int nx = static_cast<int>(rhs_buf.shape[2]);
+    int ny = static_cast<int>(rhs_buf.shape[1]);
+    int nz = static_cast<int>(rhs_buf.shape[0]);
 
     // Create output numpy array for phi with same shape and layout as input (C order)
     py::array_t<double> phi_out({nz, ny, nx});
@@ -134,7 +140,7 @@ py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
     Box domain(dom_lo, dom_hi);
 
     RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
-    {AMREX_D_DECL(x_hi, y_hi, z_hi)});
+                     {AMREX_D_DECL(x_hi, y_hi, z_hi)});
     int coord = 0;
     Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
 
@@ -188,6 +194,7 @@ py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
     mf_phi_0.setVal(0.0);
     mf_phi_1.setVal(0.0);
 
+    // Copy Python RHS -> mf_rhs_0
     for (MFIter mfi(mf_rhs_0); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
         auto arr = mf_rhs_0.array(mfi);
@@ -196,42 +203,130 @@ py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
         for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
         for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
         for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-            Real x = prob_lo[0] + (i + 0.5) * dx[0];
-            Real y = prob_lo[1] + (j + 0.5) * dx[1];
-            Real z = prob_lo[2] + (k + 0.5) * dx[2];
-            arr(i,j,k) = rhs_function(x, y, z);
+            if (!fortran_order_rhs) {
+                size_t idx = static_cast<size_t>(k)*ny*nx + static_cast<size_t>(j)*nx + static_cast<size_t>(i);
+                arr(i,j,k) = *(((double*)rhs_buf.ptr) + idx);
+            } else {
+                size_t idx = static_cast<size_t>(i)*ny*nz + static_cast<size_t>(j)*nz + static_cast<size_t>(k);
+                arr(i,j,k) = *(((double*)rhs_buf.ptr) + idx);
+            }
         }
     }
 
+    // Set Dirichlet ghost cells in mf_phi_0 from boundary_values
+    // AMReX reads the ghost cell *outside* the domain face for Dirichlet BCs
+    for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_0.array(mfi);
+
+        // x lo face: ghost cell at i = -1
+        if (bx.smallEnd(0) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + static_cast<size_t>(j)*nx + 0
+                    : static_cast<size_t>(0)*ny*nz + static_cast<size_t>(j)*nz + k;
+                arr(-1, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // x hi face: ghost cell at i = nx
+        if (bx.bigEnd(0) == nx-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + static_cast<size_t>(j)*nx + (nx-1)
+                    : static_cast<size_t>(nx-1)*ny*nz + static_cast<size_t>(j)*nz + k;
+                arr(nx, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // y lo face: ghost cell at j = -1
+        if (bx.smallEnd(1) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + 0 + i
+                    : static_cast<size_t>(i)*ny*nz + 0 + k;
+                arr(i, -1, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // y hi face: ghost cell at j = ny
+        if (bx.bigEnd(1) == ny-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + static_cast<size_t>(ny-1)*nx + i
+                    : static_cast<size_t>(i)*ny*nz + static_cast<size_t>(ny-1)*nz + k;
+                arr(i, ny, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // z lo face: ghost cell at k = -1
+        if (bx.smallEnd(2) == 0) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? 0 + static_cast<size_t>(j)*nx + i
+                    : static_cast<size_t>(i)*ny*nz + static_cast<size_t>(j)*nz + 0;
+                arr(i, j, -1) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // z hi face: ghost cell at k = nz
+        if (bx.bigEnd(2) == nz-1) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(nz-1)*ny*nx + static_cast<size_t>(j)*nx + i
+                    : static_cast<size_t>(i)*ny*nz + static_cast<size_t>(j)*nz + (nz-1);
+                arr(i, j, nz) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // Interpolater (e.g., cell-centered linear)
+    amrex::CellConservativeLinear interp;
+
+    // Fill coarse RHS ghost cells before interpolating
     mf_rhs_0.FillBoundary(geomVec[0].periodicity());
 
-    // Fill fine RHS directly instead of interpolating
-    for (MFIter mfi(mf_rhs_1); mfi.isValid(); ++mfi) {
-        const Box& bx = mfi.validbox();
-        auto arr = mf_rhs_1.array(mfi);
-        const Real* dx_fine      = fine_geom.CellSize();
-        const Real* prob_lo_fine = fine_geom.ProbLo();
-        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
-        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
-        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-            Real x = prob_lo_fine[0] + (i + 0.5) * dx_fine[0];
-            Real y = prob_lo_fine[1] + (j + 0.5) * dx_fine[1];
-            Real z = prob_lo_fine[2] + (k + 0.5) * dx_fine[2];
-            // Evaluate your RHS function at (x,y,z)
-            arr(i,j,k) = rhs_function(x, y, z);
-        }
+    Vector<BCRec> bcrec(1);
+    for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+        bcrec[0].setLo(idim, BCType::ext_dir);
+        bcrec[0].setHi(idim, BCType::ext_dir);
     }
+
+    using BCFunc = std::function<void(amrex::MultiFab&, int, int,
+        amrex::IntVect const&,
+        amrex::Real, int)>;
+
+    BCFunc noopBC = [](amrex::MultiFab&, int, int,
+        amrex::IntVect const&,
+        amrex::Real, int) {};
+            
+    // Fill fine RHS via interpolation from coarse
+    // (or replace with analytic loop for better accuracy)
+    amrex::InterpFromCoarseLevel(
+        mf_rhs_1, 0.0,
+        mf_rhs_0, 0, 0, 1,
+        geomVec[0], geomVec[1],
+        noopBC, 0,
+        noopBC, 0,
+        ref_ratio, &interp,
+        bcrec, 0
+    );
 
     // --- MLPoisson with 2 levels ---
     LPInfo info;
-    // Allow coarsening now that we have multiple levels
     MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
 
     mlpoisson.setDomainBC(
         {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)},
         {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)});
 
-    mlpoisson.setLevelBC(0, nullptr);
+    mlpoisson.setLevelBC(0, &mf_phi_0);
     mlpoisson.setLevelBC(1, nullptr);
 
     MLMG mlmg(mlpoisson);
@@ -241,16 +336,16 @@ py::array_t<double> solve_poisson_adaptive(py::array_t<double> rhs_in,
     amrex::average_down(mf_phi_1, mf_phi_0, geomVec[1], geomVec[0],
         0, 1, ref_ratio);
 
-    // Copy mf_phi -> phi_out (C-order)
+    // Copy mf_phi_0 -> phi_out (C-order)
     for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
         auto arr = mf_phi_0.const_array(mfi);
         for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
             for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
                 for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
-                    size_t idx = static_cast<size_t>(k)*ny*nx + 
-                    static_cast<size_t>(j)*nx + 
-                    static_cast<size_t>(i);
+                    size_t idx = static_cast<size_t>(k)*ny*nx +
+                                static_cast<size_t>(j)*nx +
+                                static_cast<size_t>(i);
                     *(((double*)phi_buf.ptr) + idx) = arr(i,j,k);
                 }
             }
@@ -401,6 +496,7 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("fortran_order_rhs") = false);
     m.def("solve_poisson_adaptive", &solve_poisson_adaptive,
         py::arg("rhs_in"),
+        py::arg("boundary_values"),
         py::arg("x_lo") = 0.0,
         py::arg("x_hi") = 2.0*M_PI,
         py::arg("y_lo") = 0.0,
@@ -410,5 +506,6 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("tol") = 1e-10,
         py::arg("nghost") = 1,
         py::arg("fortran_order_rhs") = false,
+        py::arg("fortran_order_bc") = false,
         "Solve Poisson equation with AMR refinement around a sphere at the domain center");
 }
