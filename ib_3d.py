@@ -8,6 +8,33 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import amrex_poisson_3d
 
+def apply_poisson(x_in, bcs, x_lo, x_hi,
+                        y_lo, y_hi,
+                        z_lo, z_hi):
+    
+    # Initialize AMReX
+    amrex_poisson_3d.amrex_init([])
+
+    lap_x = []
+    
+    try:
+        # apply Laplacian operator
+        lap_x = amrex_poisson_3d.apply_poisson(
+            x_in,
+            bcs,
+            x_lo=x_lo, x_hi=x_hi,
+            y_lo=y_lo, y_hi=y_hi,
+            z_lo=z_lo, z_hi=z_hi,
+            nghost=1,
+            fortran_order_x=False,
+            fortran_order_bc=False
+        )
+        
+    finally:
+        # Clean up AMReX
+        amrex_poisson_3d.amrex_finalize()
+        return lap_x
+
 def solve_poisson(rhs, bcs, x_lo, x_hi,
                         y_lo, y_hi,
                         z_lo, z_hi, refine_radius):
@@ -188,7 +215,11 @@ if __name__ == "__main__":
     boundary_values = np.zeros_like(X) + 20  # or whatever your outer BC is
     
     phi_numerical = solve_poisson(rhs, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, refine_radius)
+    rhs_numerical = apply_poisson(phi_exact, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
+    #######################################
+    #### CHECK ERROR FOR solve_poisson ####
+    #######################################
     print(f"\nSolution shape: {phi_numerical.shape}")
     print(f"Solution min/max: {phi_numerical.min():.6f} / {phi_numerical.max():.6f}")
     
@@ -217,3 +248,38 @@ if __name__ == "__main__":
     
     # Plot results
     plot_results(X, Y, Z, phi_exact, phi_numerical, error, refine_radius)
+
+    #######################################
+    #### CHECK ERROR FOR apply_poisson ####
+    #######################################
+    rhs_numerical = rhs_numerical[1:-1,1:-1,1:-1]
+    rhs = rhs[1:-1,1:-1,1:-1]
+
+    print(f"\nSolution shape: {rhs_numerical.shape}")
+    print(f"Solution min/max: {rhs_numerical.min():.6f} / {rhs_numerical.max():.6f}")
+    
+    # Compute error
+    error = rhs_numerical - rhs
+    max_error = np.abs(error).max()
+    rms_error = np.sqrt(np.mean(error**2))
+    
+    print(f"\nError Analysis:")
+    print(f"Max error: {max_error:.6e}")
+    print(f"RMS error: {rms_error:.6e}")
+    
+    # Compute error in central region (where we have fine grid)
+    center_x = 0.5 * (x_lo + x_hi)
+    center_y = 0.5 * (y_lo + y_hi)
+    center_z = 0.5 * (z_lo + z_hi)
+    
+    r = np.sqrt((X[1:-1,1:-1,1:-1] - center_x)**2 + (Y[1:-1,1:-1,1:-1] - center_y)**2 + (Z[1:-1,1:-1,1:-1] - center_z)**2)
+    central_mask = r <= refine_radius
+    
+    if np.any(central_mask):
+        central_error = np.abs(error[central_mask])
+        print(f"\nCentral region (r <= {refine_radius}) error:")
+        print(f"  Max error: {central_error.max():.6e}")
+        print(f"  RMS error: {np.sqrt(np.mean(central_error**2)):.6e}")
+    
+    # Plot results
+    plot_results(X[1:-1,1:-1,1:-1], Y[1:-1,1:-1,1:-1], Z[1:-1,1:-1,1:-1], rhs, rhs_numerical, error, refine_radius)

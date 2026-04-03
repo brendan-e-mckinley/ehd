@@ -293,6 +293,49 @@ def spreadQ_prime(X, Y, xq, yq, n_x, n_y, q, delta_r, cut):
     
     return Sq
 
+# 3d spreading
+@jit(nopython=True)
+def spreadQ_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, q, delta_r, cut, dx, dy, dz):
+    Sq = np.zeros_like(X)
+    Nq = len(q)
+    # dx = X[0, 1, 0] - X[0, 0, 0]
+    # dy = Y[1, 0, 0] - Y[0, 0, 0]
+    # dz = Z[0, 0, 1] - Z[0, 0, 0]
+    Nx = X.shape[1]
+    Ny = X.shape[0]
+    Nz = X.shape[2]
+
+    for k in range(Nq):
+        xk = xq[k]
+        yk = yq[k]
+        zk = zq[k]
+
+        i_min = max(int((xk - cut - X[0, 0, 0]) / dx), 0)
+        i_max = min(int((xk + cut - X[0, 0, 0]) / dx) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0, 0, 0]) / dy), 0)
+        j_max = min(int((yk + cut - Y[0, 0, 0]) / dy) + 1, Ny)
+        k_min = max(int((zk - cut - Z[0, 0, 0]) / dz), 0)
+        k_max = min(int((zk + cut - Z[0, 0, 0]) / dz) + 1, Nz)
+
+        X_local = X[j_min:j_max, i_min:i_max, k_min:k_max]
+        Y_local = Y[j_min:j_max, i_min:i_max, k_min:k_max]
+        Z_local = Z[j_min:j_max, i_min:i_max, k_min:k_max]
+
+        Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2 + (Z_local - zk)**2)
+
+        mask = (Rk <= cut)
+
+        n_dot_rhat = np.where(
+            mask,
+            (n_x[k] * (X_local - xk) + n_y[k] * (Y_local - yk) + n_z[k] * (Z_local - zk)) / Rk,
+            0.0
+        )
+
+        contribution = q[k] * n_dot_rhat * delta_r(Rk) * mask
+        Sq[j_min:j_max, i_min:i_max, k_min:k_max] += contribution
+
+    return Sq
+
 # Interpolation operator
 @jit(nopython=True)
 def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
@@ -327,6 +370,46 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
         contribution = Phi_local * n_dot_rhat * delta_vals * mask
 
         Jphi[k] = dx_loc * dy_loc * np.sum(contribution)
+
+    return Jphi
+
+# @jit(nopython=True)
+def interpPhi_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, Phi, delta_r, cut, dx_loc, dy_loc, dz_loc):
+    Jphi = np.zeros_like(xq)
+    # dx_loc = X[0, 1, 0] - X[0, 0, 0]
+    # dy_loc = Y[1, 0, 0] - Y[0, 0, 0]
+    # dz_loc = Z[0, 0, 1] - Z[0, 0, 0]
+    Ny, Nx, Nz = X.shape
+
+    for k in range(len(xq)):
+        xk, yk, zk = xq[k], yq[k], zq[k]
+        nxk, nyk, nzk = n_x[k], n_y[k], n_z[k]
+
+        i_min = max(int((xk - cut - X[0, 0, 0]) / dx_loc), 0)
+        i_max = min(int((xk + cut - X[0, 0, 0]) / dx_loc) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0, 0, 0]) / dy_loc), 0)
+        j_max = min(int((yk + cut - Y[0, 0, 0]) / dy_loc) + 1, Ny)
+        k_min = max(int((zk - cut - Z[0, 0, 0]) / dz_loc), 0)
+        k_max = min(int((zk + cut - Z[0, 0, 0]) / dz_loc) + 1, Nz)
+
+        X_local = X[j_min:j_max, i_min:i_max, k_min:k_max]
+        Y_local = Y[j_min:j_max, i_min:i_max, k_min:k_max]
+        Z_local = Z[j_min:j_max, i_min:i_max, k_min:k_max]
+        Phi_local = Phi[j_min:j_max, i_min:i_max, k_min:k_max]
+
+        dx = X_local - xk
+        dy = Y_local - yk
+        dz = Z_local - zk
+        R = np.sqrt(dx**2 + dy**2 + dz**2)
+
+        mask = R <= cut
+
+        R_safe = np.where(R > 0, R, 1.0)
+        n_dot_rhat = np.where(mask, (nxk * dx + nyk * dy + nzk * dz) / R_safe, 0.0)
+
+        delta_vals = delta_r(R)
+        contribution = Phi_local * n_dot_rhat * delta_vals * mask
+        Jphi[k] = dx_loc * dy_loc * dz_loc * np.sum(contribution)
 
     return Jphi
 
@@ -397,6 +480,43 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
 
     return Jphi
 
+@jit(nopython=True)
+def interpPhi_3d(X, Y, Z, xq, yq, zq, Phi, delta, cut, dx_loc, dy_loc, dz_loc):
+    Jphi = np.zeros_like(xq)
+    Nx = X.shape[1]
+    Ny = X.shape[0]
+    Nz = X.shape[2]
+    # dx_loc = X[0, 1, 0] - X[0, 0, 0]
+    # dy_loc = Y[1, 0, 0] - Y[0, 0, 0]
+    # dz_loc = Z[0, 0, 1] - Z[0, 0, 0]
+
+    for k in range(len(xq)):
+        xk, yk, zk = xq[k], yq[k], zq[k]
+
+        i_min = max(int((xk - cut - X[0, 0, 0]) / dx_loc), 0)
+        i_max = min(int((xk + cut - X[0, 0, 0]) / dx_loc) + 1, Nx)
+        j_min = max(int((yk - cut - Y[0, 0, 0]) / dy_loc), 0)
+        j_max = min(int((yk + cut - Y[0, 0, 0]) / dy_loc) + 1, Ny)
+        k_min = max(int((zk - cut - Z[0, 0, 0]) / dz_loc), 0)
+        k_max = min(int((zk + cut - Z[0, 0, 0]) / dz_loc) + 1, Nz)
+
+        X_local = X[j_min:j_max, i_min:i_max, k_min:k_max]
+        Y_local = Y[j_min:j_max, i_min:i_max, k_min:k_max]
+        Z_local = Z[j_min:j_max, i_min:i_max, k_min:k_max]
+        Phi_local = Phi[j_min:j_max, i_min:i_max, k_min:k_max]
+
+        dx = X_local - xk
+        dy = Y_local - yk
+        dz = Z_local - zk
+        R = np.sqrt(dx**2 + dy**2 + dz**2)
+
+        mask = R <= cut
+        delta_vals = delta(R)
+        contribution = Phi_local * delta_vals * mask
+        Jphi[k] = dx_loc * dy_loc * dz_loc * np.sum(contribution)
+
+    return Jphi
+
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     Phi = Phi.reshape(Ny, Nx).T
@@ -417,76 +537,88 @@ def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
     return G_d_G.ravel(order='F')
 
-def Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz, Phi_BC, N_pm_BC):
-    # Reshape to 3D
-    Phi = Phi.reshape(Nz, Ny, Nx)
+def Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz):
+    Phi  = Phi.reshape(Nz, Ny, Nx)
     N_pm = N_pm.reshape(Nz, Ny, Nx)
 
-    # Apply boundary conditions and compute gradients in z-direction
-    Phi_BC_z = np.concatenate([
-        Phi_BC[0, 1:-1, 1:-1].reshape(1, Ny, Nx),
-        Phi,
-        Phi_BC[-1, 1:-1, 1:-1].reshape(1, Ny, Nx)
-    ], axis=0)
-    Phi_z = (0.5/dz) * (Phi_BC_z[2:, :, :] - Phi_BC_z[:-2, :, :])
+    def gradient(F, d, axis):
+        grad = np.empty_like(F)
+        # Central differences for interior
+        interior = [slice(None)] * 3
+        interior[axis] = slice(1, -1)
+        fwd = [slice(None)] * 3
+        fwd[axis] = slice(2, None)
+        bwd = [slice(None)] * 3
+        bwd[axis] = slice(None, -2)
+        grad[tuple(interior)] = (F[tuple(fwd)] - F[tuple(bwd)]) / (2 * d)
 
-    N_pm_BC_z = np.concatenate([
-        N_pm_BC[0, 1:-1, 1:-1].reshape(1, Ny, Nx),
-        N_pm,
-        N_pm_BC[-1, 1:-1, 1:-1].reshape(1, Ny, Nx)
-    ], axis=0)
-    N_pm_z = (0.5/dz) * (N_pm_BC_z[2:, :, :] - N_pm_BC_z[:-2, :, :])
+        # Forward difference at low boundary
+        lo = [slice(None)] * 3
+        lo[axis] = 0
+        lo1 = [slice(None)] * 3
+        lo1[axis] = 1
+        lo2 = [slice(None)] * 3
+        lo2[axis] = 2
+        grad[tuple(lo)] = (-3*F[tuple(lo)] + 4*F[tuple(lo1)] - F[tuple(lo2)]) / (2 * d)
 
-    # Apply boundary conditions and compute gradients in y-direction
-    Phi_BC_y = np.concatenate([
-        Phi_BC[1:-1, 0, 1:-1].reshape(Nz, 1, Nx),
-        Phi,
-        Phi_BC[1:-1, -1, 1:-1].reshape(Nz, 1, Nx)
-    ], axis=1)
-    Phi_y = (0.5/dy) * (Phi_BC_y[:, 2:, :] - Phi_BC_y[:, :-2, :])
+        # Backward difference at high boundary
+        hi = [slice(None)] * 3
+        hi[axis] = -1
+        hi1 = [slice(None)] * 3
+        hi1[axis] = -2
+        hi2 = [slice(None)] * 3
+        hi2[axis] = -3
+        grad[tuple(hi)] = (3*F[tuple(hi)] - 4*F[tuple(hi1)] + F[tuple(hi2)]) / (2 * d)
 
-    N_pm_BC_y = np.concatenate([
-        N_pm_BC[1:-1, 0, 1:-1].reshape(Nz, 1, Nx),
-        N_pm,
-        N_pm_BC[1:-1, -1, 1:-1].reshape(Nz, 1, Nx)
-    ], axis=1)
-    N_pm_y = (0.5/dy) * (N_pm_BC_y[:, 2:, :] - N_pm_BC_y[:, :-2, :])
+        return grad
 
-    # Apply boundary conditions and compute gradients in x-direction
-    Phi_BC_x = np.concatenate([
-        Phi_BC[1:-1, 1:-1, 0].reshape(Nz, Ny, 1),
-        Phi,
-        Phi_BC[1:-1, 1:-1, -1].reshape(Nz, Ny, 1)
-    ], axis=2)
-    Phi_x = (0.5/dx) * (Phi_BC_x[:, :, 2:] - Phi_BC_x[:, :, :-2])
+    Phi_x  = gradient(Phi,  dx, axis=2)
+    Phi_y  = gradient(Phi,  dy, axis=1)
+    Phi_z  = gradient(Phi,  dz, axis=0)
 
-    N_pm_BC_x = np.concatenate([
-        N_pm_BC[1:-1, 1:-1, 0].reshape(Nz, Ny, 1),
-        N_pm,
-        N_pm_BC[1:-1, 1:-1, -1].reshape(Nz, Ny, 1)
-    ], axis=2)
-    N_pm_x = (0.5/dx) * (N_pm_BC_x[:, :, 2:] - N_pm_BC_x[:, :, :-2])
+    N_pm_x = gradient(N_pm, dx, axis=2)
+    N_pm_y = gradient(N_pm, dy, axis=1)
+    N_pm_z = gradient(N_pm, dz, axis=0)
 
-    # Compute the dot product
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y + N_pm_z * Phi_z
-
     return G_d_G.ravel(order='F')
 
-def Constrained_Lap_3d(ctxt, delta_layer, Nx, Ny, Nz, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+def Constrained_Lap_3d(ctxt, ctxt_BCs, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Sop_prime, Jop_prime):
     A_x_Ctx = np.zeros_like(ctxt)
     
     sz = Nx * Ny * Nz
+    q_i = 3 * sz
+    dl2 = delta_layer**2
+
     Phi = ctxt[:sz]
     N_p = ctxt[sz:2*sz]
     N_m = ctxt[2*sz:3*sz]
-    
-    dl2 = delta_layer**2
+    Q = ctxt[q_i:q_i+Nib]
+    Q_p = ctxt[q_i+Nib:q_i+2*Nib]
+    Q_m = ctxt[q_i+2*Nib:q_i+3*Nib]
 
-    solved_1 = amr_solve.solve_poisson((0.5*N_p - 0.5*N_m).reshape(Nz, Ny, Nx), x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    Phi_reshaped = Phi.reshape(Nz, Ny, Nx, order='F')
+    N_p_reshaped = N_p.reshape(Nz, Ny, Nx, order='F')
+    N_m_reshaped = N_m.reshape(Nz, Ny, Nx, order='F')
+
+    Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
+    
+    SQ = Sop_prime(Q)
+    SQ_p = Sop_prime(Q_p)
+    SQ_m = Sop_prime(Q_m)
+
+    solved_1 = amr_solve.solve_poisson((0.5*N_p_reshaped - 0.5*N_m_reshaped + SQ), Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    solved_2 = amr_solve.solve_poisson(SQ_p, N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    solved_3 = amr_solve.solve_poisson(SQ_m, N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
 
     A_x_Ctx[:sz] = dl2 * Phi + solved_1
-    A_x_Ctx[sz:2*sz] = N_p
-    A_x_Ctx[2*sz:3*sz] = N_m
+    A_x_Ctx[sz:2*sz] = N_p + solved_2
+    A_x_Ctx[2*sz:3*sz] = N_m + solved_3
+    A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi_reshaped)
+    A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p_reshaped)
+    A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m_reshaped)
     
     return A_x_Ctx
 
@@ -539,6 +671,24 @@ def apply_Schur_R(dLap, p_blocks, delta_layer, Nx, Ny, Sop_prime, Jop_prime):
 
     return [res_1, res_2, res_3]
 
+def apply_Schur_R_3d(p_blocks, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    p, p_p, p_m = p_blocks
+
+    # apply B 
+    Bp = Sop_prime(p)
+    Bp_p = Sop_prime(p_p)
+    Bp_m = Sop_prime(p_m)
+
+    # apply A inverse 
+    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv_R_3d([Bp, Bp_p, Bp_m], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    # apply C 
+    res_1 = delta_layer * Jop_prime(Ainv_Bp)
+    res_2 = Jop_prime(Ainv_Bp_p)
+    res_3 = Jop_prime(Ainv_Bp_m)
+
+    return [res_1, res_2, res_3]
+
 def apply_Ainv_R(dLap, target_vec, delta_layer):
     target_vec_1, target_vec_2, target_vec_3 = target_vec
 
@@ -554,41 +704,105 @@ def apply_Ainv_R(dLap, target_vec, delta_layer):
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
-def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+def apply_Ainv_R_3d(target_vec, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    target_vec_1, target_vec_2, target_vec_3 = target_vec
+
+    ## ZEROS FOR NOW BUT THIS IS PROBABLY WRONG
+    zero_bcs = np.zeros_like(target_vec_2)
+
+    dl2 = delta_layer**2
+
+    # second and third blocks are straightforward
+    result_vec_2 = amr_solve.solve_poisson(target_vec_2, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    result_vec_3 = amr_solve.solve_poisson(target_vec_3, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    # use these results to compute first block 
+    rhs = target_vec_1 - 0.5 * result_vec_2 + 0.5 * result_vec_3
+    result_vec_1 = amr_solve.solve_poisson(rhs / dl2, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    return [result_vec_1, result_vec_2, result_vec_3]
+
+def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Jop, Jop_prime):
     dl2 = delta_layer**2
     sz = Nx * Ny * Nz
+    q_i = 3 * sz
     
     b_Ctx = np.zeros_like(ctxt)
     
     Phi = ctxt[:sz]
     N_p = ctxt[sz:2*sz]
     N_m = ctxt[2*sz:3*sz]
-    
-    Phi_BC = ctxt_BCs[:sz]
-    N_p_BC = ctxt_BCs[sz:2*sz]
-    N_m_BC = ctxt_BCs[2*sz:3*sz]
 
-    # flatten/reshape these correctly 
-    Phi_reshaped = Phi.reshape((Nz, Ny, Nx), order='F')
-    N_p_reshaped = N_p.reshape((Nz, Ny, Nx), order='F')
-    N_m_reshaped = N_m.reshape((Nz, Ny, Nx), order='F')
+    Phi_reshaped = Phi.reshape(Nz, Ny, Nx, order='F')
+    N_p_reshaped = N_p.reshape(Nz, Ny, Nx, order='F')
+    N_m_reshaped = N_m.reshape(Nz, Ny, Nx, order='F')
 
-    computed_lap = Lap @ Phi
-    computed_lap = computed_lap + Phi_BC
-    
-    alpha_p = 1
-    alpha_m = 1
+    Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+
+    # compute some derivatives we use on the RHS
+    ## APPLY POISSON MAY BE THE ISSUE HERE
+    computed_lap_int = amr_solve.apply_poisson(Phi_reshaped, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    # Trying something hacky just to see if it fixes it
+    computed_lap = np.zeros_like(Phi_reshaped)
+    computed_lap[1:-1,1:-1,1:-1] = computed_lap_int[1:-1,1:-1,1:-1]
+    gdg_p = G_d_G(Phi, N_p)
+    gdg_m = G_d_G(Phi, N_m)
 
     # (advection terms when we get there)
 
     # rhs
-    rhs_1 = (-dl2 * Phi_BC).reshape((Nz, Ny, Nx), order='F')
-    rhs_2 = (-N_p * computed_lap - N_p_BC - G_d_G(Phi, N_p)).reshape((Nz, Ny, Nx), order='F')
-    rhs_3 = (N_m * computed_lap - N_m_BC + G_d_G(Phi, N_m)).reshape((Nz, Ny, Nx), order='F')
+    rhs_1 = np.zeros_like(Phi_reshaped)
+    rhs_2 = (-N_p * computed_lap.ravel(order='F') - gdg_p.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
+    rhs_3 = (N_m * computed_lap.ravel(order='F') + gdg_m.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
 
-    b_Ctx[:sz] =  amr_solve.solve_poisson(rhs_1, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
-    b_Ctx[sz:2*sz] = amr_solve.solve_poisson(rhs_2, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
-    b_Ctx[2*sz:3*sz] = amr_solve.solve_poisson(rhs_3, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[:sz] =  amr_solve.solve_poisson(rhs_1, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[sz:2*sz] = amr_solve.solve_poisson(rhs_2, N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[2*sz:3*sz] = amr_solve.solve_poisson(rhs_3, N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[q_i:q_i+Nib] = Q_BC
+    b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p_reshaped) * Jop_prime(Phi_reshaped)
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m_reshaped) * Jop_prime(Phi_reshaped)
+    
+    return b_Ctx
+
+def Build_RHS_Schur_System_3d(ctxt, ctxt_BCs, G_d_G, delta_layer, Nx, Ny, Nz, Nib, Jop, Jop_prime, Sop_prime, dx, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny * Nz
+    q_i = 3 * sz
+    dl2 = delta_layer**2
+
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+
+    Phi_reshaped = Phi.reshape(Nz, Ny, Nx, order='F')
+    N_p_reshaped = N_p.reshape(Nz, Ny, Nx, order='F')
+    N_m_reshaped = N_m.reshape(Nz, Ny, Nx, order='F')
+
+    Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
+
+    # compute some derivatives we use on the RHS
+    ## APPLY POISSON MAY BE THE ISSUE HERE
+    computed_lap_int = amr_solve.apply_poisson(Phi_reshaped, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    # Trying something hacky just to see if it fixes it
+    computed_lap = np.zeros_like(Phi_reshaped)
+    computed_lap[1:-1,1:-1,1:-1] = computed_lap_int[1:-1,1:-1,1:-1]
+
+    # advection terms when we get there
+
+    b_Ctx[:sz] = dl2 * computed_lap.ravel(order='F') + 0.5 * N_p - 0.5 * N_m
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap.ravel(order='F') - G_d_G(Phi, N_p)
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap.ravel(order='F') + G_d_G(Phi, N_m)
+    b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_reshaped)
+    b_Ctx[q_i+Nib:q_i+2*Nib] = -Jop(N_p_reshaped) * Jop_prime(Phi_reshaped)
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop(N_m_reshaped) * Jop_prime(Phi_reshaped)
 
     return b_Ctx
 
@@ -1000,6 +1214,18 @@ def SchurLinearOperator_R(dLap, shape, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_
         return np.concatenate([res_1, res_2, res_3])
     return LinearOperator((n, n), matvec=mv)
 
+# LinearOperator object for using the Schur complement as our LHS matrix in GMRES
+def SchurLinearOperator_R_3d(shape, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    n = shape
+    def mv(p_block):
+        p = p_block[0:Nib]
+        p_p = p_block[Nib:2*Nib]
+        p_m = p_block[2*Nib:3*Nib]
+
+        res_1, res_2, res_3 = apply_Schur_R_3d([p, p_p, p_m], delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+        return np.concatenate([res_1, res_2, res_3])
+    return LinearOperator((n, n), matvec=mv)
+
 def schur_rhs_R(dLap, rhs, Nx, Ny, Nib, delta_layer, Jop_prime):
     sz = Nx * Ny
     q_i = 3 * sz
@@ -1015,6 +1241,28 @@ def schur_rhs_R(dLap, rhs, Nx, Ny, Nib, delta_layer, Jop_prime):
     CAinv_phi = delta_layer * Jop_prime(Ainv_phi.reshape(Ny, Nx, order='F'))
     CAinv_n_p = Jop_prime(Ainv_n_p.reshape(Ny, Nx, order='F'))
     CAinv_n_m = Jop_prime(Ainv_n_m.reshape(Ny, Nx, order='F'))
+
+    schur_rhs_1 = CAinv_phi - rhs_4
+    schur_rhs_2 = CAinv_n_p - rhs_5
+    schur_rhs_3 = CAinv_n_m - rhs_6
+
+    return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
+
+def schur_rhs_R_3d(rhs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime):
+    sz = Nx * Ny * Nz
+    q_i = 3 * sz
+
+    rhs_1 = rhs[:sz]
+    rhs_2 = rhs[sz:2*sz]
+    rhs_3 = rhs[2*sz:3*sz]
+    rhs_4 = rhs[q_i:q_i+Nib]
+    rhs_5 = rhs[q_i+Nib:q_i+2*Nib]
+    rhs_6 = rhs[q_i+2*Nib:q_i+3*Nib]
+
+    Ainv_phi, Ainv_n_p, Ainv_n_m = apply_Ainv_R_3d([rhs_1.reshape(Nz, Ny, Nx, order='F'), rhs_2.reshape(Nz, Ny, Nx, order='F'), rhs_3.reshape(Nz, Ny, Nx, order='F')], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    CAinv_phi = delta_layer * Jop_prime(Ainv_phi.reshape(Nz, Ny, Nx, order='F'))
+    CAinv_n_p = Jop_prime(Ainv_n_p.reshape(Nz, Ny, Nx, order='F'))
+    CAinv_n_m = Jop_prime(Ainv_n_m.reshape(Nz, Ny, Nx, order='F'))
 
     schur_rhs_1 = CAinv_phi - rhs_4
     schur_rhs_2 = CAinv_n_p - rhs_5
@@ -1046,6 +1294,33 @@ def post_processing_compute_R(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer, Sop_
     phi = -dLap.solve_A(rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
+
+def post_processing_compute_R_3d(p_block, rhs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime):
+    sz = Nx * Ny * Nz
+    dl2 = delta_layer**2
+
+    p = p_block[0:Nib]
+    p_p = p_block[Nib:2*Nib]
+    p_m = p_block[2*Nib:3*Nib]
+
+    rhs_1 = rhs[:sz]
+    rhs_2 = rhs[sz:2*sz]
+    rhs_3 = rhs[2*sz:3*sz]
+
+    ## ZEROS FOR NOW BUT THIS IS PROBABLY WRONG
+    zero_bcs = np.zeros_like(rhs_1.reshape(Nz, Ny, Nx, order='F'))
+
+    # get rhs for what we already know how to solve
+    rhs_n_p = rhs_2 - Sop_prime(p_p).ravel(order='F')
+    rhs_n_m = rhs_3 - Sop_prime(p_m).ravel(order='F')
+
+    n_p = amr_solve.solve_poisson(rhs_n_p.reshape(Nz, Ny, Nx, order='F'), zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    n_m = amr_solve.solve_poisson(rhs_n_m.reshape(Nz, Ny, Nx, order='F'), zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    rhs_phi = (rhs_1.reshape(Nz, Ny, Nx, order='F') - 0.5*n_p + 0.5*n_m - Sop_prime(p)) / dl2
+    phi = amr_solve.solve_poisson(rhs_phi, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    return np.concatenate((phi.ravel(order='F'), n_p.ravel(order='F'), n_m.ravel(order='F'), p, p_p, p_m))
 
 @jit(nopython=True)
 def solve_from_svd(U, Sigma, Vh, rhs):
