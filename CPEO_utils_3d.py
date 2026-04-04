@@ -604,14 +604,15 @@ def Constrained_Lap_3d(ctxt, ctxt_BCs, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi,
     Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
     N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
     N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
+    zero_bcs = np.zeros_like(Phi_bcs)
     
     SQ = Sop_prime(Q)
     SQ_p = Sop_prime(Q_p)
     SQ_m = Sop_prime(Q_m)
 
-    solved_1 = amr_solve.solve_poisson((0.5*N_p_reshaped - 0.5*N_m_reshaped + SQ), Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
-    solved_2 = amr_solve.solve_poisson(SQ_p, N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
-    solved_3 = amr_solve.solve_poisson(SQ_m, N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    solved_1 = amr_solve.solve_poisson((0.5*N_p_reshaped - 0.5*N_m_reshaped + SQ), zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    solved_2 = amr_solve.solve_poisson(SQ_p, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    solved_3 = amr_solve.solve_poisson(SQ_m, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
 
     A_x_Ctx[:sz] = dl2 * Phi + solved_1
     A_x_Ctx[sz:2*sz] = N_p + solved_2
@@ -671,7 +672,7 @@ def apply_Schur_R(dLap, p_blocks, delta_layer, Nx, Ny, Sop_prime, Jop_prime):
 
     return [res_1, res_2, res_3]
 
-def apply_Schur_R_3d(p_blocks, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+def apply_Schur_R_3d(p_blocks, ctxt_BCs, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz):
     p, p_p, p_m = p_blocks
 
     # apply B 
@@ -680,7 +681,7 @@ def apply_Schur_R_3d(p_blocks, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_
     Bp_m = Sop_prime(p_m)
 
     # apply A inverse 
-    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv_R_3d([Bp, Bp_p, Bp_m], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    Ainv_Bp, Ainv_Bp_p, Ainv_Bp_m = apply_Ainv_R_3d_bcs([Bp, Bp_p, Bp_m], ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz)
 
     # apply C 
     res_1 = delta_layer * Jop_prime(Ainv_Bp)
@@ -719,6 +720,31 @@ def apply_Ainv_R_3d(target_vec, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
     # use these results to compute first block 
     rhs = target_vec_1 - 0.5 * result_vec_2 + 0.5 * result_vec_3
     result_vec_1 = amr_solve.solve_poisson(rhs / dl2, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    return [result_vec_1, result_vec_2, result_vec_3]
+
+def apply_Ainv_R_3d_bcs(target_vec, ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz):
+    target_vec_1, target_vec_2, target_vec_3 = target_vec
+
+    ## SPECIFIC BCS
+    Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
+    zero_bcs = np.zeros_like(Phi_bcs)
+
+    dl2 = delta_layer**2
+
+    # second and third blocks are straightforward
+    result_vec_2 = amr_solve.solve_poisson(target_vec_2, N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    result_vec_3 = amr_solve.solve_poisson(target_vec_3, N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    # result_vec_2_zero = amr_solve.solve_poisson(target_vec_2, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    # result_vec_3_zero = amr_solve.solve_poisson(target_vec_3, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+
+    # use these results to compute first block 
+    # rhs = target_vec_1 - 0.5 * result_vec_2_zero + 0.5 * result_vec_3_zero
+    rhs = target_vec_1 - 0.5 * result_vec_2 + 0.5 * result_vec_3
+    result_vec_1 = amr_solve.solve_poisson(rhs / dl2, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
@@ -1215,14 +1241,14 @@ def SchurLinearOperator_R(dLap, shape, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_
     return LinearOperator((n, n), matvec=mv)
 
 # LinearOperator object for using the Schur complement as our LHS matrix in GMRES
-def SchurLinearOperator_R_3d(shape, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+def SchurLinearOperator_R_3d(shape, ctxt_BCs, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz):
     n = shape
     def mv(p_block):
         p = p_block[0:Nib]
         p_p = p_block[Nib:2*Nib]
         p_m = p_block[2*Nib:3*Nib]
 
-        res_1, res_2, res_3 = apply_Schur_R_3d([p, p_p, p_m], delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+        res_1, res_2, res_3 = apply_Schur_R_3d([p, p_p, p_m], ctxt_BCs, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz)
         return np.concatenate([res_1, res_2, res_3])
     return LinearOperator((n, n), matvec=mv)
 
@@ -1248,7 +1274,7 @@ def schur_rhs_R(dLap, rhs, Nx, Ny, Nib, delta_layer, Jop_prime):
 
     return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
 
-def schur_rhs_R_3d(rhs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime):
+def schur_rhs_R_3d(rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime):
     sz = Nx * Ny * Nz
     q_i = 3 * sz
 
@@ -1258,8 +1284,7 @@ def schur_rhs_R_3d(rhs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, del
     rhs_4 = rhs[q_i:q_i+Nib]
     rhs_5 = rhs[q_i+Nib:q_i+2*Nib]
     rhs_6 = rhs[q_i+2*Nib:q_i+3*Nib]
-
-    Ainv_phi, Ainv_n_p, Ainv_n_m = apply_Ainv_R_3d([rhs_1.reshape(Nz, Ny, Nx, order='F'), rhs_2.reshape(Nz, Ny, Nx, order='F'), rhs_3.reshape(Nz, Ny, Nx, order='F')], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    Ainv_phi, Ainv_n_p, Ainv_n_m = apply_Ainv_R_3d_bcs([rhs_1.reshape(Nz, Ny, Nx, order='F'), rhs_2.reshape(Nz, Ny, Nx, order='F'), rhs_3.reshape(Nz, Ny, Nx, order='F')], ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz)
     CAinv_phi = delta_layer * Jop_prime(Ainv_phi.reshape(Nz, Ny, Nx, order='F'))
     CAinv_n_p = Jop_prime(Ainv_n_p.reshape(Nz, Ny, Nx, order='F'))
     CAinv_n_m = Jop_prime(Ainv_n_m.reshape(Nz, Ny, Nx, order='F'))

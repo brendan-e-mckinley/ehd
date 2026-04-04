@@ -37,7 +37,7 @@ z = x.copy()
 dz = z[1] - z[0]
 
 ## Miscellaneous parameters
-tol = 1e-4
+tol = 1e-3
 beta_BC = 7.94
 sigma_bc = 0.78  # 0.68
 delta_layer = 0.1  # 5*dx; %6*dx;
@@ -215,8 +215,8 @@ def Phi_exact(x, y, z):
 def Npm_exact(x, y, z):
     return 0 * x + 1.0
 
-# Phi_initial = Phi_exact(X, Y, Z)
-# Npm_initial = Npm_exact(X, Y, Z)
+Phi_initial = Phi_exact(X, Y, Z)
+Npm_initial = Npm_exact(X, Y, Z)
 
 # # Create a structured grid
 # grid = pv.StructuredGrid(X, Y, Z)
@@ -231,8 +231,14 @@ def Npm_exact(x, y, z):
 # plotter.show(title='Phi_exact')
 
 # # Plot Npm_exact
+# # Get the scalar values
+# scalars = grid['Npm_exact']
+
+# # Create opacity array: transparent if |value - 1| < 0.001, else opaque
+# opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
 # plotter = pv.Plotter()
-# plotter.add_mesh(grid, scalars='Npm_exact', show_scalar_bar=True)
+# plotter.add_mesh(grid, scalars='Npm_exact', opacity=opacity, show_scalar_bar=True)
 # plotter.show(title='Npm_exact')
 
 # Compute exact solutions
@@ -385,7 +391,7 @@ def b_Op_3d(ctxt):
     return cpeo.Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G_3d, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Jop, Jop_prime)
 
 def b_Op_Schur_3d(ctxt):
-    return cpeo.Build_RHS_Schur_System_3d(ctxt, ctxt_BCs, G_d_G_3d, delta_layer, Nx, Ny, Nz, Nib, Jop, Jop_prime, Sop_prime, dx, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    return cpeo.Build_RHS_Schur_System_3d(ctxt, ctxt_BCs_Schur, G_d_G_3d, delta_layer, Nx, Ny, Nz, Nib, Jop, Jop_prime, Sop_prime, dx, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
 def AxOp_3d(ctxt):
     return cpeo.Constrained_Lap_3d(ctxt, ctxt_BCs, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Sop_prime, Jop_prime)
@@ -479,12 +485,26 @@ plotter.show(title='Phi_exact')
 
 # Plot Npm_exact
 plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Np_exact', show_scalar_bar=True)
+# Get the scalar values
+scalars = grid['Np_exact']
+
+# Create opacity array: transparent if |value - 1| < 0.001, else opaque
+opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
+plotter = pv.Plotter()
+plotter.add_mesh(grid, scalars='Np_exact', opacity=opacity, show_scalar_bar=True)
 plotter.show(title='Np_exact')
 
 # Plot Npm_exact
 plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Nm_exact', show_scalar_bar=True)
+# Get the scalar values
+scalars = grid['Nm_exact']
+
+# Create opacity array: transparent if |value - 1| < 0.001, else opaque
+opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
+plotter = pv.Plotter()
+plotter.add_mesh(grid, scalars='Nm_exact', opacity=opacity, show_scalar_bar=True)
 plotter.show(title='Nm_exact')
 
 # # initialize objects for anderson
@@ -556,9 +576,9 @@ DG = np.full((len(schurRHS), m), np.nan)
 u_n = ctxt.copy()
 
 # Build dense Schur matrix
-schurOp = cpeo.SchurLinearOperator_R_3d(shape, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+# schurOp = cpeo.SchurLinearOperator_R_3d(shape, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 schurRHS = b_Op_Schur_3d(ctxt)
-computedRHS = cpeo.schur_rhs_R_3d(schurRHS, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
+computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
 schurDense = np.zeros((Nib * 3, Nib * 3))
 for col in range(Nib * 3): 
     eye_mat = np.zeros(Nib * 3)
@@ -566,7 +586,7 @@ for col in range(Nib * 3):
     p = eye_mat[0:Nib]
     p_p = eye_mat[Nib:2*Nib]
     p_m = eye_mat[2*Nib:3*Nib]
-    res_1, res_2, res_3 = cpeo.apply_Schur_R_3d([p, p_p, p_m], delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    res_1, res_2, res_3 = cpeo.apply_Schur_R_3d([p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index)
     schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
 
 # Compute SVD once
@@ -679,7 +699,7 @@ pr.enable()
 #######################################
 
 schurRHS = b_Op_Schur_3d(ctxt)
-computedRHS = cpeo.schur_rhs_R_3d(schurRHS, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
+computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
 
 # Use SVD to solve
 p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
@@ -689,10 +709,45 @@ u_next = G_u_n.copy()
 G_u_next = G_u_n.copy()
 err = []
 
+Phi = u_next[:index].reshape((Nz, Ny, Nx), order='F')
+Np = u_next[index:2*index].reshape((Nz, Ny, Nx), order='F')
+Nm = u_next[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
+
+# Create a structured grid
+grid = pv.StructuredGrid(X, Y, Z)
+
+# Add the scalar fields
+grid['Phi_solved'] = Phi.ravel(order='F')
+grid['Np_solved'] = Np.ravel(order='F')
+grid['Nm_solved'] = Nm.ravel(order='F')
+
+# Plot Phi_solved
+plotter = pv.Plotter()
+plotter.add_mesh(grid, scalars='Phi_solved', show_scalar_bar=True)
+plotter.show(title='Phi_solved')
+
+# Plot Np_solved
+plotter = pv.Plotter()
+mesh = plotter.add_mesh(grid, scalars='Np_solved', show_scalar_bar=True)
+# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Np)]
+# mesh.set_scalar_bar_range([Np.min(), Np.max()])
+# mesh.map_scalars('Np_solved', clim=[Np.min(), Np.max()])
+# mesh.set_opacity(opacity)
+plotter.show(title='Np_solved')
+
+# Plot Nm_solved
+plotter = pv.Plotter()
+mesh = plotter.add_mesh(grid, scalars='Nm_solved', show_scalar_bar=True)
+# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Nm)]
+# mesh.set_scalar_bar_range([Nm.min(), Nm.max()])
+# mesh.map_scalars('Nm_solved', clim=[Nm.min(), Nm.max()])
+# mesh.set_opacity(opacity)
+plotter.show(title='Nm_solved')
+
 # Anderson acceleration loop
 for inner_its in range(100000):
     schurRHS = b_Op_Schur_3d(ctxt)
-    computedRHS = cpeo.schur_rhs_R_3d(schurRHS, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
+    computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
 
     # Use SVD to solve
     p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
@@ -732,7 +787,7 @@ for inner_its in range(100000):
     p_next = u_next[3*index:]
     
     # Check convergence
-    res1, res2, res3 = cpeo.apply_Schur_R_3d([p, p_p, p_m], delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    res1, res2, res3 = cpeo.apply_Schur_R_3d([p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index)
     schur_next = np.concatenate([res1, res2, res3])
     err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
     
@@ -760,19 +815,19 @@ plotter.show(title='Phi_solved')
 # Plot Np_solved
 plotter = pv.Plotter()
 mesh = plotter.add_mesh(grid, scalars='Np_solved', show_scalar_bar=True)
-opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Np)]
-mesh.set_scalar_bar_range([Np.min(), Np.max()])
-mesh.map_scalars('Np_solved', clim=[Np.min(), Np.max()])
-mesh.set_opacity(opacity)
+# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Np)]
+# mesh.set_scalar_bar_range([Np.min(), Np.max()])
+# mesh.map_scalars('Np_solved', clim=[Np.min(), Np.max()])
+# mesh.set_opacity(opacity)
 plotter.show(title='Np_solved')
 
 # Plot Nm_solved
 plotter = pv.Plotter()
 mesh = plotter.add_mesh(grid, scalars='Nm_solved', show_scalar_bar=True)
-opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Nm)]
-mesh.set_scalar_bar_range([Nm.min(), Nm.max()])
-mesh.map_scalars('Nm_solved', clim=[Nm.min(), Nm.max()])
-mesh.set_opacity(opacity)
+# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Nm)]
+# mesh.set_scalar_bar_range([Nm.min(), Nm.max()])
+# mesh.map_scalars('Nm_solved', clim=[Nm.min(), Nm.max()])
+# mesh.set_opacity(opacity)
 plotter.show(title='Nm_solved')
     
     # ctxt = u_next.copy()
