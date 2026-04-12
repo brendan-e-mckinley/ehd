@@ -36,6 +36,11 @@ dy = y[1] - y[0]
 z = x.copy()
 dz = z[1] - z[0]
 
+## Fine grid
+Nx_fine, Ny_fine, Nz_fine = 128, 128, 128
+x_fine = np.linspace(x_lo, x_hi, Nx_fine) 
+dx_fine = x_fine[1] - x_fine[0]
+
 ## Miscellaneous parameters
 tol = 1e-3
 beta_BC = 7.94
@@ -82,7 +87,7 @@ rad = 0.25
 
 # Choose number of subdivisions so point spacing matches dx
 # Edge length of icosphere ~ rad * 1.0 / nu (approximate)
-nu = max(1, int(rad / dx))
+nu = max(1, int(rad / (dx)))
 vertices, faces = icosphere.icosphere(nu)
 
 # vertices are already on the unit sphere, scale to radius
@@ -464,48 +469,7 @@ LHS = AxOp(ctxt)
 err_curr = np.linalg.norm(LHS - RHS) / np.linalg.norm(RHS)
 print(f'Initial residual: {err_curr}')
 
-check_solve, _ = gmres(AxOp, RHS, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
-
-Phi_initial = check_solve[:index]
-Np_initial = check_solve[index:2*index]
-Nm_initial = check_solve[2*index:3*index]
-
-# Create a structured grid
-grid = pv.StructuredGrid(X, Y, Z)
-
-# Add the scalar fields
-grid['Phi_exact'] = Phi_initial
-grid['Np_exact'] = Np_initial
-grid['Nm_exact'] = Nm_initial
-
-# Plot Phi_exact
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Phi_exact', show_scalar_bar=True)
-plotter.show(title='Phi_exact')
-
-# Plot Npm_exact
-plotter = pv.Plotter()
-# Get the scalar values
-scalars = grid['Np_exact']
-
-# Create opacity array: transparent if |value - 1| < 0.001, else opaque
-opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
-
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Np_exact', opacity=opacity, show_scalar_bar=True)
-plotter.show(title='Np_exact')
-
-# Plot Npm_exact
-plotter = pv.Plotter()
-# Get the scalar values
-scalars = grid['Nm_exact']
-
-# Create opacity array: transparent if |value - 1| < 0.001, else opaque
-opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
-
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Nm_exact', opacity=opacity, show_scalar_bar=True)
-plotter.show(title='Nm_exact')
+# G_u_n, _ = gmres(AxOp, RHS, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
 # # initialize objects for anderson
 # DU = np.full((len(RHS), m), np.nan)
@@ -564,6 +528,43 @@ plotter.show(title='Nm_exact')
 #         print('Rphi = rho Converged!')
 #         break
 
+# # Create a structured grid
+# grid = pv.StructuredGrid(X, Y, Z)
+
+# # Add the scalar fields
+# grid['Phi_exact'] = Phi
+# grid['Np_exact'] = Np
+# grid['Nm_exact'] = Nm
+
+# # Plot Phi_exact
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Phi_exact', show_scalar_bar=True)
+# plotter.show(title='Phi_exact')
+
+# # Plot Npm_exact
+# plotter = pv.Plotter()
+# # Get the scalar values
+# scalars = grid['Np_exact']
+
+# # Create opacity array: transparent if |value - 1| < 0.001, else opaque
+# opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Np_exact', opacity=opacity, show_scalar_bar=True)
+# plotter.show(title='Np_exact')
+
+# # Plot Npm_exact
+# plotter = pv.Plotter()
+# # Get the scalar values
+# scalars = grid['Nm_exact']
+
+# # Create opacity array: transparent if |value - 1| < 0.001, else opaque
+# opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Nm_exact', opacity=opacity, show_scalar_bar=True)
+# plotter.show(title='Nm_exact')
+
 ##########################
 #####  SOLVER SETUP  #####
 ##########################
@@ -594,7 +595,7 @@ U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
 
 # Use SVD solve to initialize 
 p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-G_u_n = cpeo.post_processing_compute_R_3d(p_next, schurRHS, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
+G_u_n = cpeo.post_processing_compute_R_3d(p_next, schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
 
 # compare solved residual
 LHS = AxOp(G_u_n)
@@ -703,7 +704,7 @@ computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_l
 
 # Use SVD to solve
 p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-G_u_n = cpeo.post_processing_compute_R_3d(p_next, schurRHS, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
+G_u_n = cpeo.post_processing_compute_R_3d(p_next, schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
 
 u_next = G_u_n.copy()
 G_u_next = G_u_n.copy()
@@ -713,45 +714,45 @@ Phi = u_next[:index].reshape((Nz, Ny, Nx), order='F')
 Np = u_next[index:2*index].reshape((Nz, Ny, Nx), order='F')
 Nm = u_next[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
 
-# Create a structured grid
-grid = pv.StructuredGrid(X, Y, Z)
+# # Create a structured grid
+# grid = pv.StructuredGrid(X, Y, Z)
 
-# Add the scalar fields
-grid['Phi_solved'] = Phi.ravel(order='F')
-grid['Np_solved'] = Np.ravel(order='F')
-grid['Nm_solved'] = Nm.ravel(order='F')
+# # Add the scalar fields
+# grid['Phi_solved'] = Phi.ravel(order='F')
+# grid['Np_solved'] = Np.ravel(order='F')
+# grid['Nm_solved'] = Nm.ravel(order='F')
 
-# Plot Phi_solved
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Phi_solved', show_scalar_bar=True)
-plotter.show(title='Phi_solved')
+# # Plot Phi_solved
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Phi_solved', show_scalar_bar=True)
+# plotter.show(title='Phi_solved')
 
-# Plot Np_solved
-plotter = pv.Plotter()
-mesh = plotter.add_mesh(grid, scalars='Np_solved', show_scalar_bar=True)
-# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Np)]
-# mesh.set_scalar_bar_range([Np.min(), Np.max()])
-# mesh.map_scalars('Np_solved', clim=[Np.min(), Np.max()])
-# mesh.set_opacity(opacity)
-plotter.show(title='Np_solved')
+# # Plot Np_solved
+# plotter = pv.Plotter()
+# mesh = plotter.add_mesh(grid, scalars='Np_solved', show_scalar_bar=True)
+# # opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Np)]
+# # mesh.set_scalar_bar_range([Np.min(), Np.max()])
+# # mesh.map_scalars('Np_solved', clim=[Np.min(), Np.max()])
+# # mesh.set_opacity(opacity)
+# plotter.show(title='Np_solved')
 
-# Plot Nm_solved
-plotter = pv.Plotter()
-mesh = plotter.add_mesh(grid, scalars='Nm_solved', show_scalar_bar=True)
-# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Nm)]
-# mesh.set_scalar_bar_range([Nm.min(), Nm.max()])
-# mesh.map_scalars('Nm_solved', clim=[Nm.min(), Nm.max()])
-# mesh.set_opacity(opacity)
-plotter.show(title='Nm_solved')
+# # Plot Nm_solved
+# plotter = pv.Plotter()
+# mesh = plotter.add_mesh(grid, scalars='Nm_solved', show_scalar_bar=True)
+# # opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Nm)]
+# # mesh.set_scalar_bar_range([Nm.min(), Nm.max()])
+# # mesh.map_scalars('Nm_solved', clim=[Nm.min(), Nm.max()])
+# # mesh.set_opacity(opacity)
+# plotter.show(title='Nm_solved')
 
 # Anderson acceleration loop
 for inner_its in range(100000):
-    schurRHS = b_Op_Schur_3d(ctxt)
+    schurRHS = b_Op_Schur_3d(u_next)
     computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
 
     # Use SVD to solve
     p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-    G_u_next = cpeo.post_processing_compute_R_3d(p_next, schurRHS, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
+    G_u_next = cpeo.post_processing_compute_R_3d(p_n, schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
 
     m_n = min(m, inner_its + 1)
     
@@ -791,6 +792,12 @@ for inner_its in range(100000):
     schur_next = np.concatenate([res1, res2, res3])
     err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
     
+    # # Check convergence
+    # RHS_check = b_Op_3d(u_next)
+    # LHS_check = AxOp_3d(u_next)
+    # err_curr = np.linalg.norm(LHS_check - RHS_check) / np.linalg.norm(RHS_check)
+    # print(f'Residual: {err_curr}')
+
     err.append(err_curr)
     
     print(f'Iteration {inner_its}: residual = {err_curr}')
@@ -798,6 +805,20 @@ for inner_its in range(100000):
     if err_curr < 5e-3:
         print('Rphi = rho Converged!')
         break
+
+# Save results
+savemat('Full_System_3d.mat', {
+    'ctxt_Rphi': ctxt,
+    'u_next': u_next,
+    'Xint': Xint,
+    'Yint': Yint,
+    'xib': xib,
+    'yib': yib,
+    'Phi': Phi,
+    'Np': Np,
+    'Nm': Nm,
+    'err': np.array(err)
+})
 
 # Create a structured grid
 grid = pv.StructuredGrid(X, Y, Z)
@@ -814,20 +835,26 @@ plotter.show(title='Phi_solved')
 
 # Plot Np_solved
 plotter = pv.Plotter()
-mesh = plotter.add_mesh(grid, scalars='Np_solved', show_scalar_bar=True)
-# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Np)]
-# mesh.set_scalar_bar_range([Np.min(), Np.max()])
-# mesh.map_scalars('Np_solved', clim=[Np.min(), Np.max()])
-# mesh.set_opacity(opacity)
+# Get the scalar values
+scalars = grid['Np_solved']
+
+# Create opacity array: transparent if |value - 1| < 0.001, else opaque
+opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
+plotter = pv.Plotter()
+plotter.add_mesh(grid, scalars='Np_solved', opacity=opacity, show_scalar_bar=True)
 plotter.show(title='Np_solved')
 
-# Plot Nm_solved
+# Plot Npm_exact
 plotter = pv.Plotter()
-mesh = plotter.add_mesh(grid, scalars='Nm_solved', show_scalar_bar=True)
-# opacity = [0.0 if val == 1 else 1.0 for val in np.unique(Nm)]
-# mesh.set_scalar_bar_range([Nm.min(), Nm.max()])
-# mesh.map_scalars('Nm_solved', clim=[Nm.min(), Nm.max()])
-# mesh.set_opacity(opacity)
+# Get the scalar values
+scalars = grid['Nm_solved']
+
+# Create opacity array: transparent if |value - 1| < 0.001, else opaque
+opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+
+plotter = pv.Plotter()
+plotter.add_mesh(grid, scalars='Nm_solved', opacity=opacity, show_scalar_bar=True)
 plotter.show(title='Nm_solved')
     
     # ctxt = u_next.copy()

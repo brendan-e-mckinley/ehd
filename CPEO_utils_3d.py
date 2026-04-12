@@ -769,6 +769,7 @@ def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, Nib, x_lo,
     Q_BC = ctxt_BCs[q_i:q_i+Nib]
     Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+    zero_bcs = np.zeros_like(Phi_bcs)
 
     # compute some derivatives we use on the RHS
     ## APPLY POISSON MAY BE THE ISSUE HERE
@@ -776,19 +777,19 @@ def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, Nib, x_lo,
     # Trying something hacky just to see if it fixes it
     computed_lap = np.zeros_like(Phi_reshaped)
     computed_lap[1:-1,1:-1,1:-1] = computed_lap_int[1:-1,1:-1,1:-1]
-    gdg_p = G_d_G(Phi, N_p)
-    gdg_m = G_d_G(Phi, N_m)
+    gdg_p = G_d_G(Phi, N_p).reshape(Nz, Ny, Nx, order='F')
+    gdg_m = G_d_G(Phi, N_m).reshape(Nz, Ny, Nx, order='F')
 
     # (advection terms when we get there)
 
     # rhs
-    rhs_1 = np.zeros_like(Phi_reshaped)
-    rhs_2 = (-N_p * computed_lap.ravel(order='F') - gdg_p.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
-    rhs_3 = (N_m * computed_lap.ravel(order='F') + gdg_m.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
+    # rhs_1 = np.zeros_like(Phi_reshaped)
+    # rhs_2 = (-N_p * computed_lap.ravel(order='F') - gdg_p.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
+    # rhs_3 = (N_m * computed_lap.ravel(order='F') + gdg_m.ravel(order='F')).reshape((Nz, Ny, Nx), order='F')
 
-    b_Ctx[:sz] =  amr_solve.solve_poisson(rhs_1, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
-    b_Ctx[sz:2*sz] = amr_solve.solve_poisson(rhs_2, N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
-    b_Ctx[2*sz:3*sz] = amr_solve.solve_poisson(rhs_3, N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[:sz] =  amr_solve.solve_poisson(np.zeros_like(Phi_reshaped), Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[sz:2*sz] = amr_solve.solve_poisson((-N_p * computed_lap.ravel(order='F')).reshape((Nz, Ny, Nx), order='F'), N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F') - amr_solve.solve_poisson(gdg_p, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
+    b_Ctx[2*sz:3*sz] = amr_solve.solve_poisson((N_m * computed_lap.ravel(order='F')).reshape((Nz, Ny, Nx), order='F'), N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F') + amr_solve.solve_poisson(gdg_m, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3).ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p_reshaped) * Jop_prime(Phi_reshaped)
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m_reshaped) * Jop_prime(Phi_reshaped)
@@ -823,7 +824,7 @@ def Build_RHS_Schur_System_3d(ctxt, ctxt_BCs, G_d_G, delta_layer, Nx, Ny, Nz, Ni
 
     # advection terms when we get there
 
-    b_Ctx[:sz] = dl2 * computed_lap.ravel(order='F') + 0.5 * N_p - 0.5 * N_m
+    b_Ctx[:sz] = np.zeros_like(Phi) # Manufactured solution: dl2 * computed_lap.ravel(order='F') + 0.5 * N_p - 0.5 * N_m
     b_Ctx[sz:2*sz] =  -N_p * computed_lap.ravel(order='F') - G_d_G(Phi, N_p)
     b_Ctx[2*sz:3*sz] =  N_m * computed_lap.ravel(order='F') + G_d_G(Phi, N_m)
     b_Ctx[q_i:q_i+Nib] = delta_layer * Jop_prime(Phi_reshaped)
@@ -1284,7 +1285,7 @@ def schur_rhs_R_3d(rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo,
     rhs_4 = rhs[q_i:q_i+Nib]
     rhs_5 = rhs[q_i+Nib:q_i+2*Nib]
     rhs_6 = rhs[q_i+2*Nib:q_i+3*Nib]
-    Ainv_phi, Ainv_n_p, Ainv_n_m = apply_Ainv_R_3d_bcs([rhs_1.reshape(Nz, Ny, Nx, order='F'), rhs_2.reshape(Nz, Ny, Nx, order='F'), rhs_3.reshape(Nz, Ny, Nx, order='F')], ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz)
+    Ainv_phi, Ainv_n_p, Ainv_n_m = apply_Ainv_R_3d([rhs_1.reshape(Nz, Ny, Nx, order='F'), rhs_2.reshape(Nz, Ny, Nx, order='F'), rhs_3.reshape(Nz, Ny, Nx, order='F')], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
     CAinv_phi = delta_layer * Jop_prime(Ainv_phi.reshape(Nz, Ny, Nx, order='F'))
     CAinv_n_p = Jop_prime(Ainv_n_p.reshape(Nz, Ny, Nx, order='F'))
     CAinv_n_m = Jop_prime(Ainv_n_m.reshape(Nz, Ny, Nx, order='F'))
@@ -1320,7 +1321,7 @@ def post_processing_compute_R(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer, Sop_
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
 
-def post_processing_compute_R_3d(p_block, rhs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime):
+def post_processing_compute_R_3d(p_block, rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime):
     sz = Nx * Ny * Nz
     dl2 = delta_layer**2
 
@@ -1333,17 +1334,20 @@ def post_processing_compute_R_3d(p_block, rhs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo
     rhs_3 = rhs[2*sz:3*sz]
 
     ## ZEROS FOR NOW BUT THIS IS PROBABLY WRONG
+    Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
     zero_bcs = np.zeros_like(rhs_1.reshape(Nz, Ny, Nx, order='F'))
 
     # get rhs for what we already know how to solve
     rhs_n_p = rhs_2 - Sop_prime(p_p).ravel(order='F')
     rhs_n_m = rhs_3 - Sop_prime(p_m).ravel(order='F')
 
-    n_p = amr_solve.solve_poisson(rhs_n_p.reshape(Nz, Ny, Nx, order='F'), zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
-    n_m = amr_solve.solve_poisson(rhs_n_m.reshape(Nz, Ny, Nx, order='F'), zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    n_p = amr_solve.solve_poisson(rhs_n_p.reshape(Nz, Ny, Nx, order='F'), N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    n_m = amr_solve.solve_poisson(rhs_n_m.reshape(Nz, Ny, Nx, order='F'), N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
 
     rhs_phi = (rhs_1.reshape(Nz, Ny, Nx, order='F') - 0.5*n_p + 0.5*n_m - Sop_prime(p)) / dl2
-    phi = amr_solve.solve_poisson(rhs_phi, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+    phi = amr_solve.solve_poisson(rhs_phi, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
 
     return np.concatenate((phi.ravel(order='F'), n_p.ravel(order='F'), n_m.ravel(order='F'), p, p_p, p_m))
 
