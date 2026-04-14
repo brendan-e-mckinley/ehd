@@ -34,6 +34,36 @@ def apply_poisson(x_in, bcs, x_lo, x_hi,
         # Clean up AMReX
         amrex_poisson_3d.amrex_finalize()
         return lap_x
+    
+def solve_poisson_double_grid(rhs_coarse, rhs_fine, bcs, x_lo, x_hi,
+                                y_lo, y_hi,
+                                z_lo, z_hi):
+    
+    # Initialize AMReX
+    amrex_poisson_3d.amrex_init([])
+
+    phi_numerical_coarse = []
+    phi_numerical_fine = []
+    
+    try:
+        # Solve Poisson equation with AMR
+        phi_numerical_coarse, phi_numerical_fine = amrex_poisson_3d.solve_poisson_adaptive_double_grid(
+            rhs_coarse,
+            rhs_fine,
+            bcs, 
+            x_lo=x_lo, x_hi=x_hi,
+            y_lo=y_lo, y_hi=y_hi,
+            z_lo=z_lo, z_hi=z_hi,
+            tol=1e-10,
+            nghost=1,
+            fortran_order_rhs=False,
+            fortran_order_bc=False
+        )
+        
+    finally:
+        # Clean up AMReX
+        amrex_poisson_3d.amrex_finalize()
+        return phi_numerical_coarse, phi_numerical_fine
 
 def solve_poisson(rhs, bcs, x_lo, x_hi,
                         y_lo, y_hi,
@@ -183,103 +213,115 @@ def plot_results(X, Y, Z, phi_exact, phi_numerical, error, refine_radius=None):
     plt.show()
 
 if __name__ == "__main__":
-    # Grid parameters for INPUT arrays
-    # You can use whatever resolution you want for input - the solver will interpolate
-    nx, ny, nz = 200, 200, 200  # Reduced from 450 for faster testing
+    nx_coarse, ny_coarse, nz_coarse = 64, 64, 64 
+    nx_fine, ny_fine, nz_fine = 128, 128, 128 
     x_lo, x_hi = 0.0, 2 * np.pi
     y_lo, y_hi = 0.0, 2 * np.pi
     z_lo, z_hi = 0.0, 2 * np.pi
 
-    refine_radius = 0.3
+    fine_rad = 0.25 * (x_hi - x_lo) / 2
+    x_lo_fine, x_hi_fine = np.pi - fine_rad, np.pi + fine_rad
+    y_lo_fine, y_hi_fine = np.pi - fine_rad, np.pi + fine_rad
+    z_lo_fine, z_hi_fine = np.pi - fine_rad, np.pi + fine_rad
     
     # Create coordinate arrays
-    x = np.linspace(x_lo, x_hi, nx)
-    y = np.linspace(y_lo, y_hi, ny)
-    z = np.linspace(z_lo, z_hi, nz)
+    x_coarse = np.linspace(x_lo, x_hi, nx_coarse)
+    y_coarse = np.linspace(y_lo, y_hi, ny_coarse)
+    z_coarse = np.linspace(z_lo, z_hi, nz_coarse)
 
-    xint = x[1:-1]
-    yint = y[1:-1]
-    zint = z[1:-1]
+    x_fine = np.linspace(x_lo, x_hi, nx_fine)
+    y_fine = np.linspace(y_lo, y_hi, ny_fine)
+    z_fine = np.linspace(z_lo, z_hi, nz_fine)
     
     # Create 3D meshgrid
-    Xint, Yint, Zint = np.meshgrid(xint, yint, zint, indexing='ij')
-    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+    X_coarse, Y_coarse, Z_coarse = np.meshgrid(x_coarse, y_coarse, z_coarse, indexing='ij')
+    X_fine, Y_fine, Z_fine = np.meshgrid(x_fine, y_fine, z_fine, indexing='ij')
     
     # Analytical solution: phi = sin(x) * sin(y) * sin(z)
     # This satisfies phi = 0 at all boundaries
-    phi_exact = 20 + np.sin(X) * np.sin(Y) * np.sin(Z)
+    phi_exact_coarse = 20 + np.sin(X_coarse) * np.sin(Y_coarse) * np.sin(Z_coarse)
+    phi_exact_fine = 20 + np.sin(X_fine) * np.sin(Y_fine) * np.sin(Z_fine)
     
     # For -∇²phi = rhs, we have:
     # -∇²[sin(x)sin(y)sin(z)] = 3*sin(x)*sin(y)*sin(z)
-    rhs = -3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)
-    boundary_values = np.zeros_like(X) + 20  # or whatever your outer BC is
+    rhs_coarse = -3.0 * np.sin(X_coarse) * np.sin(Y_coarse) * np.sin(Z_coarse)
+    rhs_fine = -3.0 * np.sin(X_fine) * np.sin(Y_fine) * np.sin(Z_fine)
+    boundary_values = np.zeros_like(X_coarse) + 20 
     
-    phi_numerical = solve_poisson(rhs, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, refine_radius)
-    rhs_numerical = apply_poisson(phi_exact, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    phi_numerical_coarse, phi_numerical_fine = solve_poisson_double_grid(rhs_coarse, rhs_fine, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    rhs_numerical = apply_poisson(phi_exact_coarse, boundary_values, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
-    #######################################
-    #### CHECK ERROR FOR solve_poisson ####
-    #######################################
-    print(f"\nSolution shape: {phi_numerical.shape}")
-    print(f"Solution min/max: {phi_numerical.min():.6f} / {phi_numerical.max():.6f}")
+    # #######################################
+    # #### CHECK ERROR FOR solve_poisson ####
+    # #######################################
+    # print(f"\nSolution shape: {phi_numerical.shape}")
+    # print(f"Solution min/max: {phi_numerical.min():.6f} / {phi_numerical.max():.6f}")
     
     # Compute error
-    error = phi_numerical - phi_exact
-    max_error = np.abs(error).max()
-    rms_error = np.sqrt(np.mean(error**2))
+    error_coarse = phi_numerical_coarse - phi_exact_coarse
+    max_error_coarse = np.abs(error_coarse).max()
+    rms_error_coarse = np.sqrt(np.mean(error_coarse**2))
+
+    error_fine = phi_numerical_fine - phi_exact_fine
+    max_error_fine = np.abs(error_fine).max()
+    rms_error_fine = np.sqrt(np.mean(error_fine**2))
     
-    print(f"\nError Analysis:")
-    print(f"Max error: {max_error:.6e}")
-    print(f"RMS error: {rms_error:.6e}")
+    print(f"\nError Analysis (Coarse Grid):")
+    print(f"Max error: {max_error_coarse:.6e}")
+    print(f"RMS error: {rms_error_coarse:.6e}")
+    print(f"\nError Analysis (Fine Grid):")
+    print(f"Max error: {max_error_fine:.6e}")
+    print(f"RMS error: {rms_error_fine:.6e}")
     
-    # Compute error in central region (where we have fine grid)
-    center_x = 0.5 * (x_lo + x_hi)
-    center_y = 0.5 * (y_lo + y_hi)
-    center_z = 0.5 * (z_lo + z_hi)
+    # # Compute error in central region (where we have fine grid)
+    # center_x = 0.5 * (x_lo + x_hi)
+    # center_y = 0.5 * (y_lo + y_hi)
+    # center_z = 0.5 * (z_lo + z_hi)
     
-    r = np.sqrt((X - center_x)**2 + (Y - center_y)**2 + (Z - center_z)**2)
-    central_mask = r <= refine_radius
+    # r = np.sqrt((X - center_x)**2 + (Y - center_y)**2 + (Z - center_z)**2)
+    # central_mask = r <= refine_radius
     
-    if np.any(central_mask):
-        central_error = np.abs(error[central_mask])
-        print(f"\nCentral region (r <= {refine_radius}) error:")
-        print(f"  Max error: {central_error.max():.6e}")
-        print(f"  RMS error: {np.sqrt(np.mean(central_error**2)):.6e}")
+    # if np.any(central_mask):
+    #     central_error = np.abs(error[central_mask])
+    #     print(f"\nCentral region (r <= {refine_radius}) error:")
+    #     print(f"  Max error: {central_error.max():.6e}")
+    #     print(f"  RMS error: {np.sqrt(np.mean(central_error**2)):.6e}")
     
     # Plot results
-    plot_results(X, Y, Z, phi_exact, phi_numerical, error, refine_radius)
+    plot_results(X_coarse, Y_coarse, Z_coarse, phi_exact_coarse, phi_numerical_coarse, error_coarse, 0.3)
+    plot_results(X_fine, Y_fine, Z_fine, phi_exact_fine, phi_numerical_fine, error_fine, 0.3)
 
-    #######################################
-    #### CHECK ERROR FOR apply_poisson ####
-    #######################################
-    rhs_numerical = rhs_numerical[1:-1,1:-1,1:-1]
-    rhs = rhs[1:-1,1:-1,1:-1]
+    # #######################################
+    # #### CHECK ERROR FOR apply_poisson ####
+    # #######################################
+    # rhs_numerical = rhs_numerical[1:-1,1:-1,1:-1]
+    # rhs = rhs[1:-1,1:-1,1:-1]
 
-    print(f"\nSolution shape: {rhs_numerical.shape}")
-    print(f"Solution min/max: {rhs_numerical.min():.6f} / {rhs_numerical.max():.6f}")
+    # print(f"\nSolution shape: {rhs_numerical.shape}")
+    # print(f"Solution min/max: {rhs_numerical.min():.6f} / {rhs_numerical.max():.6f}")
     
-    # Compute error
-    error = rhs_numerical - rhs
-    max_error = np.abs(error).max()
-    rms_error = np.sqrt(np.mean(error**2))
+    # # Compute error
+    # error = rhs_numerical - rhs
+    # max_error = np.abs(error).max()
+    # rms_error = np.sqrt(np.mean(error**2))
     
-    print(f"\nError Analysis:")
-    print(f"Max error: {max_error:.6e}")
-    print(f"RMS error: {rms_error:.6e}")
+    # print(f"\nError Analysis:")
+    # print(f"Max error: {max_error:.6e}")
+    # print(f"RMS error: {rms_error:.6e}")
     
-    # Compute error in central region (where we have fine grid)
-    center_x = 0.5 * (x_lo + x_hi)
-    center_y = 0.5 * (y_lo + y_hi)
-    center_z = 0.5 * (z_lo + z_hi)
+    # # Compute error in central region (where we have fine grid)
+    # center_x = 0.5 * (x_lo + x_hi)
+    # center_y = 0.5 * (y_lo + y_hi)
+    # center_z = 0.5 * (z_lo + z_hi)
     
-    r = np.sqrt((X[1:-1,1:-1,1:-1] - center_x)**2 + (Y[1:-1,1:-1,1:-1] - center_y)**2 + (Z[1:-1,1:-1,1:-1] - center_z)**2)
-    central_mask = r <= refine_radius
+    # r = np.sqrt((X[1:-1,1:-1,1:-1] - center_x)**2 + (Y[1:-1,1:-1,1:-1] - center_y)**2 + (Z[1:-1,1:-1,1:-1] - center_z)**2)
+    # central_mask = r <= refine_radius
     
-    if np.any(central_mask):
-        central_error = np.abs(error[central_mask])
-        print(f"\nCentral region (r <= {refine_radius}) error:")
-        print(f"  Max error: {central_error.max():.6e}")
-        print(f"  RMS error: {np.sqrt(np.mean(central_error**2)):.6e}")
+    # if np.any(central_mask):
+    #     central_error = np.abs(error[central_mask])
+    #     print(f"\nCentral region (r <= {refine_radius}) error:")
+    #     print(f"  Max error: {central_error.max():.6e}")
+    #     print(f"  RMS error: {np.sqrt(np.mean(central_error**2)):.6e}")
     
-    # Plot results
-    plot_results(X[1:-1,1:-1,1:-1], Y[1:-1,1:-1,1:-1], Z[1:-1,1:-1,1:-1], rhs, rhs_numerical, error, refine_radius)
+    # # Plot results
+    # plot_results(X[1:-1,1:-1,1:-1], Y[1:-1,1:-1,1:-1], Z[1:-1,1:-1,1:-1], rhs, rhs_numerical, error, refine_radius)
