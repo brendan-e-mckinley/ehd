@@ -36,10 +36,29 @@ dy = y[1] - y[0]
 z = x.copy()
 dz = z[1] - z[0]
 
-## Fine grid
-Nx_fine, Ny_fine, Nz_fine = 128, 128, 128
-x_fine = np.linspace(x_lo, x_hi, Nx_fine) 
+## Fine grid    
+ref_ratio = 2
+nx_fine_patch = Nx * ref_ratio // 2   # = 64
+ny_fine_patch = Ny * ref_ratio // 2   # = 64
+nz_fine_patch = Nz * ref_ratio // 2   # = 64
+
+# Fine patch physical extent: central 50% of the domain
+x_patch_lo = x_lo + 0.25 * (x_hi - x_lo)
+x_patch_hi = x_hi - 0.25 * (x_hi - x_lo) 
+y_patch_lo = y_lo + 0.25 * (y_hi - y_lo)
+y_patch_hi = y_hi - 0.25 * (y_hi - y_lo)
+z_patch_lo = z_lo + 0.25 * (z_hi - z_lo)
+z_patch_hi = z_hi - 0.25 * (z_hi - z_lo)
+
+x_fine = np.linspace(x_patch_lo, x_patch_hi, nx_fine_patch)
+y_fine = np.linspace(y_patch_lo, y_patch_hi, ny_fine_patch)
+z_fine = np.linspace(z_patch_lo, z_patch_hi, nz_fine_patch)
+
 dx_fine = x_fine[1] - x_fine[0]
+dy_fine = y_fine[1] - y_fine[0]
+dz_fine = z_fine[1] - z_fine[0]
+
+Xf, Yf, Zf = np.meshgrid(x_fine, y_fine, z_fine, indexing='ij')
 
 ## Miscellaneous parameters
 tol = 1e-3
@@ -388,6 +407,9 @@ def Jop_prime(P):
 def G_d_G_3d(Phi, N_pm):
     return cpeo.Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz)
 
+def G_d_G_3d_fine(Phi, N_pm):
+    return cpeo.Grad_dot_Grad_3d(Phi, N_pm, dx_fine, dy_fine, dz_fine, nx_fine_patch, ny_fine_patch, nz_fine_patch)
+
 # def G_d_G(Phi, N_pm):
 #     return cpeo.Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC)
 
@@ -418,8 +440,11 @@ def AxLinOp_3d(shape):
 
 ## LINEARITY TEST 
 phi_test = 20 + np.sin(X) * np.sin(Y) * np.sin(Z)
+phi_test_fine = 20 + np.sin(Xf) * np.sin(Yf) * np.sin(Zf)
 n_test = np.sin(X) * np.sin(Y) * np.sin(Z)
+n_test_fine = np.sin(Xf) * np.sin(Yf) * np.sin(Zf)
 f = -2 * np.sin(X) * np.sin(Y) * np.sin(Z)
+f_fine = -2 * np.sin(Xf) * np.sin(Yf) * np.sin(Zf)
 bcs = 20 + np.zeros_like(X)
 bcs[1:-1,1:-1,1:-1] = np.zeros_like(Xint)
 zero_bcs = np.zeros_like(X)
@@ -428,34 +453,51 @@ zero_bcs = np.zeros_like(X)
 #\implies phi + \nabla^{-2} n &= \nabla^{-2} f
 
 # quick check for manufactured solution
-lap_phi = -3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)
-phi_computed = amr_solve.solve_poisson(f, bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3) - amr_solve.solve_poisson(n_test, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+lap_phi_coarse = -3.0 * np.sin(X) * np.sin(Y) * np.sin(Z)
+lap_phi_fine = -3.0 * np.sin(Xf) * np.sin(Yf) * np.sin(Zf)
+solve_coarse_1, solve_fine_1 = amr_solve.solve_poisson_double_grid(f, f_fine, bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+solve_coarse_2, solve_fine_2 =  amr_solve.solve_poisson_double_grid(n_test, n_test_fine, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+phi_computed_coarse = solve_coarse_1 - solve_coarse_2
+phi_computed_fine = solve_fine_1 - solve_fine_2
 
-residual_lin = np.linalg.norm(phi_computed - phi_test) / np.linalg.norm(phi_test)
-print(f'Linearity test residual: {residual_lin}')
+residual_lin_coarse = np.linalg.norm(phi_computed_coarse - phi_test) / np.linalg.norm(phi_test)
+print(f'Linearity test coarse residual: {residual_lin_coarse}')
+residual_lin_coarse = np.linalg.norm(phi_computed_fine - phi_test_fine) / np.linalg.norm(phi_test_fine)
+print(f'Linearity test fine residual: {residual_lin_coarse}')
 
 ## DO/UNDO LAP 
-lap_phi_num = amr_solve.apply_poisson(phi_test, bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
-phi_from_lap = amr_solve.solve_poisson(lap_phi_num, bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3) - amr_solve.solve_poisson(n_test, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
+lap_phi_num_coarse, lap_phi_num_fine = amr_solve.apply_poisson(phi_test, phi_test_fine, bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+phi_from_lap_coarse, phi_from_lap_fine = amr_solve.solve_poisson_double_grid(lap_phi_num_coarse, lap_phi_num_fine, bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
-residual_phi = np.linalg.norm(phi_from_lap - phi_test) / np.linalg.norm(phi_from_lap)
-print(f'Do/undo residual: {residual_phi}')
+residual_phi_coarse = np.linalg.norm(phi_from_lap_coarse - phi_test) / np.linalg.norm(phi_test)
+print(f'Do/undo residual coarse: {residual_phi_coarse}')
+
+residual_phi_fine = np.linalg.norm(phi_from_lap_fine - phi_test_fine) / np.linalg.norm(phi_test_fine)
+print(f'Do/undo residual fine: {residual_phi_fine}')
 
 ## G DOT G
 phi_test = 5 + np.sin(X) * np.sin(Y) * np.sin(Z)
+phi_test_fine = 5 + np.sin(Xf) * np.sin(Yf) * np.sin(Zf)
 n_p_test = 5 + np.sin(X) * np.sin(Y) * np.sin(Z)
+n_p_test_fine = 5 + np.sin(Xf) * np.sin(Yf) * np.sin(Zf)
 
 # Analytical solution
 gdg = (np.cos(X)**2 * np.sin(Y)**2 * np.sin(Z)**2 +
        np.sin(X)**2 * np.cos(Y)**2 * np.sin(Z)**2 +
        np.sin(X)**2 * np.sin(Y)**2 * np.cos(Z)**2).ravel(order='F')
+gdg_fine = (np.cos(Xf)**2 * np.sin(Yf)**2 * np.sin(Zf)**2 +
+       np.sin(Xf)**2 * np.cos(Yf)**2 * np.sin(Zf)**2 +
+       np.sin(Xf)**2 * np.sin(Yf)**2 * np.cos(Zf)**2).ravel(order='F')
 
 # Numerical solution
 gdg_num = G_d_G_3d(phi_test.ravel(order='F'), n_p_test.ravel(order='F'))
+gdg_num_fine = G_d_G_3d_fine(phi_test_fine.ravel(order='F'), n_p_test_fine.ravel(order='F'))
 
 # Residual
-residual = np.linalg.norm(gdg_num - gdg) / np.linalg.norm(gdg)
-print(f'Residual: {residual}')
+residual_coarse = np.linalg.norm(gdg_num - gdg) / np.linalg.norm(gdg)
+print(f'Residual coarse: {residual_coarse}')
+residual_fine = np.linalg.norm(gdg_num_fine - gdg_fine) / np.linalg.norm(gdg_fine)
+print(f'Residual fine: {residual_fine}')
 
 ## Test basic system 
 RHS = b_Op_3d(ctxt)

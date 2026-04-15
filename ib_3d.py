@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import amrex_poisson_3d
 
-def apply_poisson(x_in, bcs, x_lo, x_hi,
+def apply_poisson(x_in_coarse, x_in_fine, bcs, x_lo, x_hi,
                         y_lo, y_hi,
                         z_lo, z_hi):
     
@@ -19,8 +19,9 @@ def apply_poisson(x_in, bcs, x_lo, x_hi,
     
     try:
         # apply Laplacian operator
-        lap_x = amrex_poisson_3d.apply_poisson(
-            x_in,
+        lap_x = amrex_poisson_3d.apply_poisson_double_grid(
+            x_in_coarse,
+            x_in_fine,
             bcs,
             x_lo=x_lo, x_hi=x_hi,
             y_lo=y_lo, y_hi=y_hi,
