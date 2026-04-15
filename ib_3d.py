@@ -47,7 +47,7 @@ def solve_poisson_double_grid(rhs_coarse, rhs_fine, bcs, x_lo, x_hi,
     
     try:
         # Solve Poisson equation with AMR
-        phi_numerical_coarse, phi_numerical_fine = amrex_poisson_3d.solve_poisson_adaptive_double_grid_2(
+        phi_numerical_coarse, phi_numerical_fine = amrex_poisson_3d.solve_poisson_adaptive_double_grid(
             rhs_coarse,
             rhs_fine,
             bcs, 
@@ -232,9 +232,9 @@ if __name__ == "__main__":
 
     # FIX: fine patch covers the central 50% of the domain (matching cube_half_widths = 0.25*(hi-lo))
     # At ref_ratio=2, coarse has 64 cells, so the central half = 32 coarse cells = 64 fine cells
-    nx_fine_patch = nx_coarse * 4   # = 64
-    ny_fine_patch = ny_coarse * 4   # = 64
-    nz_fine_patch = nz_coarse * 4   # = 64
+    nx_fine_patch = nx_coarse * ref_ratio // 2   # = 64
+    ny_fine_patch = ny_coarse * ref_ratio // 2   # = 64
+    nz_fine_patch = nz_coarse * ref_ratio // 2   # = 64
 
     # Fine patch physical extent: central 50% of the domain
     x_patch_lo = x_lo + 0.25 * (x_hi - x_lo)   # = pi/2
@@ -244,9 +244,9 @@ if __name__ == "__main__":
     z_patch_lo = z_lo + 0.25 * (z_hi - z_lo)
     z_patch_hi = z_hi - 0.25 * (z_hi - z_lo)
 
-    x_fine = np.linspace(x_patch_lo, x_patch_hi, nx_coarse)
-    y_fine = np.linspace(y_patch_lo, y_patch_hi, ny_coarse)
-    z_fine = np.linspace(z_patch_lo, z_patch_hi, nz_coarse)
+    x_fine = np.linspace(x_patch_lo, x_patch_hi, nx_fine_patch)
+    y_fine = np.linspace(y_patch_lo, y_patch_hi, ny_fine_patch)
+    z_fine = np.linspace(z_patch_lo, z_patch_hi, nz_fine_patch)
 
     Xf, Yf, Zf = np.meshgrid(x_fine, y_fine, z_fine, indexing='ij')
 
