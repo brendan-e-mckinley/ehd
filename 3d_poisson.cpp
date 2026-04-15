@@ -926,9 +926,266 @@ std::pair<py::array_t<double>, py::array_t<double>> solve_poisson_adaptive_doubl
     check_3d_array(boundary_values);
 
     py::buffer_info rhs_coarse_buf = rhs_in_coarse.request();
+    py::buffer_info rhs_fine_buf   = rhs_in_fine.request();
+    py::buffer_info bc_buf         = boundary_values.request();
+
+    int nx_coarse = static_cast<int>(rhs_coarse_buf.shape[2]);
+    int ny_coarse = static_cast<int>(rhs_coarse_buf.shape[1]);
+    int nz_coarse = static_cast<int>(rhs_coarse_buf.shape[0]);
+
+    // FIX: fine patch dimensions come from rhs_in_fine, which covers only
+    // the refined sub-region (not the full refined domain).
+    int nx_fine_patch = static_cast<int>(rhs_fine_buf.shape[2]);
+    int ny_fine_patch = static_cast<int>(rhs_fine_buf.shape[1]);
+    int nz_fine_patch = static_cast<int>(rhs_fine_buf.shape[0]);
+
+    // Output arrays
+    py::array_t<double> phi_out_coarse({nz_coarse, ny_coarse, nx_coarse});
+
+    // FIX: fine output has same shape as fine patch input, not full refined domain
+    py::array_t<double> phi_out_fine({nz_fine_patch, ny_fine_patch, nx_fine_patch});
+
+    auto phi_coarse_buf = phi_out_coarse.request();
+    auto phi_fine_buf   = phi_out_fine.request();
+
+    // Build coarse geometry
+    IntVect dom_lo(0, 0, 0);
+    IntVect dom_hi(nx_coarse-1, ny_coarse-1, nz_coarse-1);
+    Box domain(dom_lo, dom_hi);
+
+    RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
+                     {AMREX_D_DECL(x_hi, y_hi, z_hi)});
+    int coord = 0;
+    Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
+
+    Geometry geom;
+    geom.define(domain, real_box, coord, is_periodic);
+
+    BoxArray ba(domain);
+    ba.maxSize(32);
+    DistributionMapping dm(ba);
+
+    IntVect ref_ratio(AMREX_D_DECL(2,2,2));
+    int nlevs = 2;
+
+    Vector<Geometry>            geomVec(nlevs);
+    Vector<BoxArray>            baVec(nlevs);
+    Vector<DistributionMapping> dmVec(nlevs);
+
+    geomVec[0] = geom;
+    baVec[0]   = ba;
+    dmVec[0]   = dm;
+
+    // Fine level geometry and BoxArray
+    const Real cube_center[3] = {
+        0.5*(x_lo+x_hi), 0.5*(y_lo+y_hi), 0.5*(z_lo+z_hi)
+    };
+    const Real cube_half_widths[3] = {
+        0.25*(x_hi-x_lo), 0.25*(y_hi-y_lo), 0.25*(z_hi-z_lo)
+    };
+
+    BoxArray fine_ba = make_refined_ba_cube(geom, domain, cube_center, cube_half_widths, 16);
+
+    // FIX: fine_domain spans the full refined index space (coarse * ref_ratio),
+    // but fine_ba only covers the central patch. We need the full fine domain
+    // for Geometry so AMReX can compute cell sizes correctly.
+    int nx_fine_dom = nx_coarse * ref_ratio[0];
+    int ny_fine_dom = ny_coarse * ref_ratio[1];
+    int nz_fine_dom = nz_coarse * ref_ratio[2];
+
+    Geometry fine_geom;
+    {
+        Box fine_domain(IntVect(0),
+                        IntVect(AMREX_D_DECL(nx_fine_dom-1, ny_fine_dom-1, nz_fine_dom-1)));
+        fine_geom.define(fine_domain, real_box, coord, is_periodic);
+    }
+    DistributionMapping fine_dm(fine_ba);
+
+    geomVec[1] = fine_geom;
+    baVec[1]   = fine_ba;
+    dmVec[1]   = fine_dm;
+
+    // MultiFabs
+    MultiFab mf_phi_0(baVec[0], dmVec[0], 1, nghost);
+    MultiFab mf_phi_1(baVec[1], dmVec[1], 1, nghost);
+    MultiFab mf_rhs_0(baVec[0], dmVec[0], 1, 0);
+    MultiFab mf_rhs_1(baVec[1], dmVec[1], 1, 0);
+
+    mf_phi_0.setVal(0.0);
+    mf_phi_1.setVal(0.0);
+
+    // Copy coarse RHS (unchanged from original)
+    for (MFIter mfi(mf_rhs_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_rhs_0.array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            if (!fortran_order_rhs) {
+                size_t idx = (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + i;
+                arr(i,j,k) = *(((double*)rhs_coarse_buf.ptr) + idx);
+            } else {
+                size_t idx = (size_t)i*ny_coarse*nz_coarse + (size_t)j*nz_coarse + k;
+                arr(i,j,k) = *(((double*)rhs_coarse_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // FIX: Copy fine RHS using zero-based offsets into the patch buffer.
+    // fine_ba boxes have AMReX indices in the full fine index space, so
+    // i,j,k are NOT zero-based. Subtract smallEnd to index into rhs_fine_buf.
+    for (MFIter mfi(mf_rhs_1); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_rhs_1.array(mfi);
+        const IntVect lo = bx.smallEnd(); // offset into the patch array
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            int li = i - lo[0];
+            int lj = j - lo[1];
+            int lk = k - lo[2];
+            if (!fortran_order_rhs) {
+                size_t idx = (size_t)lk*ny_fine_patch*nx_fine_patch + (size_t)lj*nx_fine_patch + li;
+                arr(i,j,k) = *(((double*)rhs_fine_buf.ptr) + idx);
+            } else {
+                size_t idx = (size_t)li*ny_fine_patch*nz_fine_patch + (size_t)lj*nz_fine_patch + lk;
+                arr(i,j,k) = *(((double*)rhs_fine_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // Set Dirichlet ghost cells in mf_phi_0 (unchanged from original)
+    for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_0.array(mfi);
+
+        if (bx.smallEnd(0) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + 0
+                    : (size_t)0*ny_coarse*nz_coarse + (size_t)j*nz_coarse + k;
+                arr(-1, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.bigEnd(0) == nx_coarse-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + (nx_coarse-1)
+                    : (size_t)(nx_coarse-1)*ny_coarse*nz_coarse + (size_t)j*nz_coarse + k;
+                arr(nx_coarse, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.smallEnd(1) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + 0 + i
+                    : (size_t)i*ny_coarse*nz_coarse + 0 + k;
+                arr(i, -1, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.bigEnd(1) == ny_coarse-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + (size_t)(ny_coarse-1)*nx_coarse + i
+                    : (size_t)i*ny_coarse*nz_coarse + (size_t)(ny_coarse-1)*nz_coarse + k;
+                arr(i, ny_coarse, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.smallEnd(2) == 0) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? 0 + (size_t)j*nx_coarse + i
+                    : (size_t)i*ny_coarse*nz_coarse + (size_t)j*nz_coarse + 0;
+                arr(i, j, -1) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.bigEnd(2) == nz_coarse-1) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)(nz_coarse-1)*ny_coarse*nx_coarse + (size_t)j*nx_coarse + i
+                    : (size_t)i*ny_coarse*nz_coarse + (size_t)j*nz_coarse + (nz_coarse-1);
+                arr(i, j, nz_coarse) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // Fill fine RHS ghost cells
+    mf_phi_1.FillBoundary(geomVec[1].periodicity());
+
+    // Solve
+    LPInfo info;
+    MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
+
+    mlpoisson.setDomainBC(
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)},
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)});
+
+    mlpoisson.setLevelBC(0, &mf_phi_0);
+    mlpoisson.setLevelBC(1, nullptr);
+
+    MLMG mlmg(mlpoisson);
+    mlmg.setVerbose(0);
+    mlmg.solve({&mf_phi_0, &mf_phi_1}, {&mf_rhs_0, &mf_rhs_1}, tol, tol);
+
+    // Copy coarse solution out (unchanged from original)
+    for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_0.const_array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            size_t idx = (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + i;
+            *(((double*)phi_coarse_buf.ptr) + idx) = arr(i,j,k);
+        }
+    }
+
+    // FIX: Copy fine solution out using the same zero-based offset logic.
+    for (MFIter mfi(mf_phi_1); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_1.const_array(mfi);
+        const IntVect lo = bx.smallEnd();
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            int li = i - lo[0];
+            int lj = j - lo[1];
+            int lk = k - lo[2];
+            size_t idx = (size_t)lk*ny_fine_patch*nx_fine_patch + (size_t)lj*nx_fine_patch + li;
+            *(((double*)phi_fine_buf.ptr) + idx) = arr(i,j,k);
+        }
+    }
+
+    return {phi_out_coarse, phi_out_fine};
+}
+
+// ASSUMING INPUT ARRAY COVERS ONLY HALF OF THE DOMAIN
+std::pair<py::array_t<double>, py::array_t<double>> solve_poisson_adaptive_double_grid_2(
+    py::array_t<double> rhs_in_coarse,
+    py::array_t<double> rhs_in_fine,
+    py::array_t<double> boundary_values,
+    double x_lo, double x_hi,
+    double y_lo, double y_hi,
+    double z_lo, double z_hi,
+    double tol,
+    int nghost,
+    bool fortran_order_rhs,
+    bool fortran_order_bc)
+{
+    check_3d_array(rhs_in_coarse);
+    check_3d_array(rhs_in_fine);
+    check_3d_array(boundary_values);
+
+    py::buffer_info rhs_coarse_buf = rhs_in_coarse.request();
     py::buffer_info rhs_fine_buf = rhs_in_fine.request();
     py::buffer_info bc_buf = boundary_values.request();
 
+    // Assuming shape is (nz, ny, nx) for C-order: [k, j, i]
     int nx_coarse = static_cast<int>(rhs_coarse_buf.shape[2]);
     int ny_coarse = static_cast<int>(rhs_coarse_buf.shape[1]);
     int nz_coarse = static_cast<int>(rhs_coarse_buf.shape[0]);
@@ -942,7 +1199,7 @@ std::pair<py::array_t<double>, py::array_t<double>> solve_poisson_adaptive_doubl
     auto phi_coarse_buf = phi_out_coarse.request();
     auto phi_fine_buf = phi_out_fine.request();
 
-    // Build AMReX geometry
+    // Build AMReX geometry (coarse)
     IntVect dom_lo(0, 0, 0);
     IntVect dom_hi(nx_coarse-1, ny_coarse-1, nz_coarse-1);
     Box domain(dom_lo, dom_hi);
@@ -973,19 +1230,18 @@ std::pair<py::array_t<double>, py::array_t<double>> solve_poisson_adaptive_doubl
     baVec[0]   = ba;     // your existing coarse BoxArray
     dmVec[0]   = dm;
 
-    // Level 1: fine (sphere region only)
     const Real cube_center[3] = {
         0.5*(x_lo+x_hi), 0.5*(y_lo+y_hi), 0.5*(z_lo+z_hi)
     };
     const Real cube_half_widths[3] = {
         0.25*(x_hi-x_lo), 0.25*(y_hi-y_lo), 0.25*(z_hi-z_lo)
     };
-    
+
     BoxArray fine_ba = make_refined_ba_cube(geom, domain, cube_center, cube_half_widths, 16);
     Geometry  fine_geom;
     {
         Box fine_domain(IntVect(0),
-                        IntVect(AMREX_D_DECL(nx_fine-1, ny_fine-1, nz_fine-1)));
+        IntVect(AMREX_D_DECL(nx_fine-1, ny_fine-1, nz_fine-1)));
         fine_geom.define(fine_domain, real_box, coord, is_periodic);
     }
     DistributionMapping fine_dm(fine_ba);
@@ -1021,7 +1277,8 @@ std::pair<py::array_t<double>, py::array_t<double>> solve_poisson_adaptive_doubl
             }
         }
     }
-    // Copy fine RHS
+
+    // Copy fine RHS -> mf_rhs_1
     for (MFIter mfi(mf_rhs_1); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
         auto arr = mf_rhs_1.array(mfi);
@@ -1191,6 +1448,27 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("y_hi") = 2.0*M_PI,
         py::arg("z_lo") = 0.0,
         py::arg("z_hi") = 2.0*M_PI,
+        py::arg("tol") = 1e-10,
+        py::arg("nghost") = 1,
+        py::arg("fortran_order_rhs") = false,
+        py::arg("fortran_order_bc") = false,
+        "Solve Poisson equation on both fine and coarse grid");
+    m.def("solve_poisson_adaptive_double_grid_2", &solve_poisson_adaptive_double_grid_2,
+        py::arg("rhs_in_coarse"),
+        py::arg("rhs_in_fine"),
+        py::arg("boundary_values"),
+        py::arg("x_lo") = 0.0,
+        py::arg("x_hi") = 2.0*M_PI,
+        py::arg("y_lo") = 0.0,
+        py::arg("y_hi") = 2.0*M_PI,
+        py::arg("z_lo") = 0.0,
+        py::arg("z_hi") = 2.0*M_PI,
+        // py::arg("x_lo_fine"),
+        // py::arg("x_hi_fine"),
+        // py::arg("y_lo_fine"),
+        // py::arg("y_hi_fine"),
+        // py::arg("z_lo_fine"),
+        // py::arg("z_hi_fine"),
         py::arg("tol") = 1e-10,
         py::arg("nghost") = 1,
         py::arg("fortran_order_rhs") = false,
