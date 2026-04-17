@@ -270,6 +270,8 @@ Npm_initial = Npm_exact(X, Y, Z)
 # N_pm_BC = Npm_exact(X, Y, Z) #np.zeros_like(X) + 5
 Phi_guess = Phi_exact(X, Y, Z) #np.zeros_like(X) + 5
 N_pm_guess = Npm_exact(X, Y, Z) #np.zeros_like(X) + 5
+Phi_guess_fine = Phi_exact(Xf, Yf, Zf) #np.zeros_like(X) + 5
+N_pm_guess_fine = Npm_exact(Xf, Yf, Zf) #np.zeros_like(X) + 5
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(X)
@@ -353,7 +355,7 @@ ctxt_BCs = np.concatenate([
 # Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
 # Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
-ctxt = np.concatenate([
+ctxt_coarse = np.concatenate([
     Phi_guess.ravel(order='F'),
     N_pm_guess.ravel(order='F'),
     N_pm_guess.ravel(order='F'),
@@ -362,11 +364,25 @@ ctxt = np.concatenate([
     np.zeros(Nib)
 ])
 
+ctxt_fine = np.concatenate([
+    Phi_guess_fine.ravel(order='F'),
+    N_pm_guess_fine.ravel(order='F'),
+    N_pm_guess_fine.ravel(order='F'),
+    np.zeros(Nib),
+    np.zeros(Nib),
+    np.zeros(Nib)
+])
+
 # Extract solution components
-index = Nx * Ny * Nz
-Phi = ctxt[:index].reshape((Nz, Ny, Nx), order='F')
-Np = ctxt[index:2*index].reshape((Nz, Ny, Nx), order='F')
-Nm = ctxt[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
+index_coarse = Nx * Ny * Nz
+Phi_coarse = ctxt_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+Np_coarse = ctxt_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+Nm_coarse = ctxt_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+
+index_fine = nx_fine_patch * ny_fine_patch * nz_fine_patch
+Phi_fine = ctxt_fine[:index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+Np_fine = ctxt_fine[index_fine:2*index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+Nm_fine = ctxt_fine[2*index_fine:3*index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
 
 # ## Boundary conditions for Nu = F system
 # f_bc_mat = np.zeros((Ny + 1, Nx))
@@ -398,11 +414,20 @@ def delta_r(r):
 def Sop_prime(q):
     return cpeo.spreadQ_prime_3d(X, Y, Z, xib, yib, zib, n_x, n_y, n_z, q, delta_r, cut, dx, dy, dz)
 
+def Sop_prime_fine(q):
+    return cpeo.spreadQ_prime_3d(Xf, Yf, Zf, xib, yib, zib, n_x, n_y, n_z, q, delta_r, cut, dx_fine, dy_fine, dz_fine)
+
 def Jop(P):
     return cpeo.interpPhi_3d(X, Y, Z, xib, yib, zib, P, delta, cut, dx, dy, dz)
 
+def Jop_fine(P):
+    return cpeo.interpPhi_3d(Xf, Yf, Zf, xib, yib, zib, P, delta, cut, dx_fine, dy_fine, dz_fine)
+
 def Jop_prime(P):
     return cpeo.interpPhi_prime_3d(X, Y, Z, xib, yib, zib, n_x, n_y, n_z, P, delta_r, cut, dx, dy, dz)
+
+def Jop_prime_fine(P):
+    return cpeo.interpPhi_prime_3d(Xf, Yf, Zf, xib, yib, zib, n_x, n_y, n_z, P, delta_r, cut, dx_fine, dy_fine, dz_fine)
 
 def G_d_G_3d(Phi, N_pm):
     return cpeo.Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz)
@@ -416,6 +441,9 @@ def G_d_G_3d_fine(Phi, N_pm):
 def b_Op_3d(ctxt):
     print(f"b_Op_3d input norm: {np.linalg.norm(ctxt)}")
     return cpeo.Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G_3d, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Jop, Jop_prime)
+
+def b_Op_Schur_3d_double_grid(ctxt_coarse, ctxt_fine):
+    return cpeo.Build_RHS_Schur_System_3d_double_grid(ctxt_coarse, ctxt_fine, ctxt_BCs_Schur, G_d_G_3d, G_d_G_3d_fine, delta_layer, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, Jop, Jop_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
 def b_Op_Schur_3d(ctxt):
     return cpeo.Build_RHS_Schur_System_3d(ctxt, ctxt_BCs_Schur, G_d_G_3d, delta_layer, Nx, Ny, Nz, Nib, Jop, Jop_prime, Sop_prime, dx, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
@@ -499,17 +527,17 @@ print(f'Residual coarse: {residual_coarse}')
 residual_fine = np.linalg.norm(gdg_num_fine - gdg_fine) / np.linalg.norm(gdg_fine)
 print(f'Residual fine: {residual_fine}')
 
-## Test basic system 
-RHS = b_Op_3d(ctxt)
-shape = 3 * Nx * Ny * Nz + 3 * Nib
-AxOp = AxLinOp_3d(shape)
+# ## Test basic system 
+# RHS = b_Op_3d(ctxt)
+# shape = 3 * Nx * Ny * Nz + 3 * Nib
+# AxOp = AxLinOp_3d(shape)
 
-shape = 3 * Nib
+# shape = 3 * Nib
 
-# compare initial residual
-LHS = AxOp(ctxt)
-err_curr = np.linalg.norm(LHS - RHS) / np.linalg.norm(RHS)
-print(f'Initial residual: {err_curr}')
+# # compare initial residual
+# LHS = AxOp(ctxt)
+# err_curr = np.linalg.norm(LHS - RHS) / np.linalg.norm(RHS)
+# print(f'Initial residual: {err_curr}')
 
 # G_u_n, _ = gmres(AxOp, RHS, rtol=tol, restart=500, callback=lambda rk: print(f"GMRES residual: {np.linalg.norm(rk)}"))
 
@@ -612,41 +640,59 @@ print(f'Initial residual: {err_curr}')
 ##########################
 
 ## Initialize variables for Rphi = rho solve
-schurRHS = b_Op_Schur_3d(ctxt)
-DU = np.full((len(schurRHS), m), np.nan)
-DG = np.full((len(schurRHS), m), np.nan)
+schurRHS_coarse, schurRHS_fine = b_Op_Schur_3d_double_grid(ctxt_coarse, ctxt_fine)
+# schurRHS_full = np.concatenate([schurRHS_coarse, schurRHS_fine])
+# DU = np.full((len(schurRHS_full), m), np.nan)
+# DG = np.full((len(schurRHS_full), m), np.nan)
 
-u_n = ctxt.copy()
+DU_coarse = np.full((len(schurRHS_coarse), m), np.nan)
+DG_coarse = np.full((len(schurRHS_coarse), m), np.nan)
+
+DU_fine = np.full((len(schurRHS_fine), m), np.nan)
+DG_fine = np.full((len(schurRHS_fine), m), np.nan)
+
+u_n_coarse = ctxt_coarse.copy()
+u_n_fine = ctxt_fine.copy()
+# u_n = np.concatenate([u_n_coarse, u_n_fine])
 
 # Build dense Schur matrix
 # schurOp = cpeo.SchurLinearOperator_R_3d(shape, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
-schurRHS = b_Op_Schur_3d(ctxt)
-computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
-schurDense = np.zeros((Nib * 3, Nib * 3))
+computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(schurRHS_coarse, schurRHS_fine, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
+schurDense_coarse = np.zeros((Nib * 3, Nib * 3))
+schurDense_fine = np.zeros((Nib * 3, Nib * 3))
 for col in range(Nib * 3): 
     eye_mat = np.zeros(Nib * 3)
     eye_mat[col] = 1
     p = eye_mat[0:Nib]
     p_p = eye_mat[Nib:2*Nib]
     p_m = eye_mat[2*Nib:3*Nib]
-    res_1, res_2, res_3 = cpeo.apply_Schur_R_3d([p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index)
-    schurDense[:,col] = np.concatenate([res_1, res_2, res_3])
+    [res_1_coarse, res_2_coarse, res_3_coarse], [res_1_fine, res_2_fine, res_3_fine] = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
+    schurDense_coarse[:,col] = np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse])
+    schurDense_fine[:,col] = np.concatenate([res_1_fine, res_2_fine, res_3_fine])
 
 # Compute SVD once
-U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
+U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse = np.linalg.svd(schurDense_coarse)
+U_schur_fine, Sigma_schur_fine, Vh_schur_fine = np.linalg.svd(schurDense_fine)
 
 # Use SVD solve to initialize 
-p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-G_u_n = cpeo.post_processing_compute_R_3d(p_next, schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
+p_next_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
+p_next_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
+G_u_n_coarse, G_u_n_fine = cpeo.post_processing_compute_R_3d_double_grid(p_next_coarse, p_next_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
+# G_u_n = np.concatenate([G_u_n_coarse, G_u_n_fine])
 
-# compare solved residual
-LHS = AxOp(G_u_n)
-RHS = b_Op_3d(G_u_n)
-err_curr = np.linalg.norm(LHS - RHS) / np.linalg.norm(RHS)
-print(f'Solved residual: {err_curr}')
+# # compare solved residual
+# LHS = AxOp(G_u_n)
+# RHS = b_Op_3d(G_u_n)
+# err_curr = np.linalg.norm(LHS - RHS) / np.linalg.norm(RHS)
+# print(f'Solved residual: {err_curr}')
 
-u_next = G_u_n.copy()
-G_u_next = G_u_n.copy()
+# u_next = np.concatenate([G_u_n_coarse, G_u_n_fine])
+# G_u_next = np.concatenate([G_u_n_coarse, G_u_n_fine])
+
+u_next_coarse = G_u_n_coarse.copy()
+u_next_fine = G_u_n_fine.copy()
+G_u_next_coarse = G_u_n_coarse.copy()
+G_u_next_fine = G_u_n_fine.copy()
 err = []
 
 # # compute body forces 
@@ -741,20 +787,28 @@ pr.enable()
 #####  solve R*phi = Rho(u, phi)  #####
 #######################################
 
-schurRHS = b_Op_Schur_3d(ctxt)
-computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
+schurRHS_coarse, schurRHS_fine = b_Op_Schur_3d_double_grid(ctxt_coarse, ctxt_fine)
+computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(schurRHS_coarse, schurRHS_fine, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
 
 # Use SVD to solve
-p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-G_u_n = cpeo.post_processing_compute_R_3d(p_next, schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
+p_next_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
+p_next_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
+G_u_n_coarse, G_u_n_fine = cpeo.post_processing_compute_R_3d_double_grid(p_next_coarse, p_next_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
 
-u_next = G_u_n.copy()
-G_u_next = G_u_n.copy()
-err = []
+u_next_coarse = G_u_n_coarse.copy()
+u_next_fine = G_u_n_fine.copy()
+# u_next = np.concatenate([u_next_coarse, u_next_fine])
+# G_u_next = np.concatenate([G_u_n_coarse, G_u_n_fine])
+err_coarse = []
+err_fine = []
 
-Phi = u_next[:index].reshape((Nz, Ny, Nx), order='F')
-Np = u_next[index:2*index].reshape((Nz, Ny, Nx), order='F')
-Nm = u_next[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
+Phi_coarse = u_next_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+Np_coarse = u_next_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+Nm_coarse = u_next_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+
+Phi_fine = u_next_fine[:index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+Np_fine = u_next_fine[index_fine:2*index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+Nm_fine = u_next_fine[2*index_fine:3*index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
 
 # # Create a structured grid
 # grid = pv.StructuredGrid(X, Y, Z)
@@ -789,50 +843,78 @@ Nm = u_next[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
 
 # Anderson acceleration loop
 for inner_its in range(100000):
-    schurRHS = b_Op_Schur_3d(u_next)
-    computedRHS = cpeo.schur_rhs_R_3d(schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime)
+    schurRHS_coarse, schurRHS_fine = b_Op_Schur_3d_double_grid(u_next_coarse, u_next_fine)
+    computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(schurRHS_coarse, schurRHS_fine, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
 
     # Use SVD to solve
-    p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
-    G_u_next = cpeo.post_processing_compute_R_3d(p_n, schurRHS, ctxt_BCs_Schur, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime)
+    p_n_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
+    p_n_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
+    G_u_next_coarse, G_u_next_fine = cpeo.post_processing_compute_R_3d_double_grid(p_n_coarse, p_n_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
+
+    # G_u_next = np.concatenate([G_u_n_coarse, G_u_n_fine])
 
     m_n = min(m, inner_its + 1)
     
     # Store differences
     if inner_its < m:
-        DU[:, inner_its] = u_next - u_n
-        DG[:, inner_its] = G_u_next - G_u_n
+        DU_coarse[:, inner_its] = u_next_coarse - u_n_coarse
+        DG_coarse[:, inner_its] = G_u_next_coarse - G_u_n_coarse
+        DU_fine[:, inner_its] = u_next_fine - u_n_fine
+        DG_fine[:, inner_its] = G_u_next_fine - G_u_n_fine
     else:
-        DU = np.roll(DU, -1, axis=1)
-        DG = np.roll(DG, -1, axis=1)
-        DU[:, -1] = u_next - u_n
-        DG[:, -1] = G_u_next - G_u_n
+        DU_coarse = np.roll(DU_coarse, -1, axis=1)
+        DG_coarse = np.roll(DG_coarse, -1, axis=1)
+        DU_fine = np.roll(DU_fine, -1, axis=1)
+        DG_fine = np.roll(DG_fine, -1, axis=1)
+        DU_coarse[:, -1] = u_next_coarse - u_n_coarse
+        DG_coarse[:, -1] = G_u_next_coarse - G_u_n_coarse
+        DU_fine[:, -1] = u_next_fine - u_n_fine
+        DG_fine[:, -1] = G_u_next_fine - G_u_n_fine
     
-    f_n = G_u_next - u_next
-    DF = DG[:, :m_n] - DU[:, :m_n]
+    f_n_coarse = G_u_next_coarse - u_next_coarse
+    f_n_fine = G_u_next_fine - u_next_fine
+    DF_coarse = DG_coarse[:, :m_n] - DU_coarse[:, :m_n]
+    DF_fine = DG_fine[:, :m_n] - DU_fine[:, :m_n]
     
     # QR decomposition
-    gamma, residuals, rank, s = lstsq(DF, f_n)
+    gamma_coarse, residuals, rank, s = lstsq(DF_coarse, f_n_coarse)
+    gamma_fine, residuals, rank, s = lstsq(DF_fine, f_n_fine)
     
-    u_n = u_next.copy()
-    G_u_n = G_u_next.copy()
+    u_n_coarse = u_next_coarse.copy()
+    u_n_fine = u_next_fine.copy()
+    G_u_n_coarse = G_u_next_coarse.copy()
+    G_u_n_fine = G_u_next_fine.copy()
     
-    u_next = (G_u_next - DG[:, :m_n] @ gamma) - (1-beta) * (f_n - DF @ gamma)
+    u_next_coarse = (G_u_next_coarse - DG_coarse[:, :m_n] @ gamma_coarse) - (1-beta) * (f_n_coarse - DF_coarse @ gamma_coarse)
+    u_next_fine = (G_u_next_fine - DG_fine[:, :m_n] @ gamma_fine) - (1-beta) * (f_n_fine - DF_fine @ gamma_fine)
+    # u_next_coarse = u_next[:3*index_coarse+3*Nib]
+    # u_next_fine = u_next[3*index_coarse+3*Nib:]
     
     # Extract solution components
-    Phi = u_next[:index].reshape((Nz, Ny, Nx), order='F')
-    Np = u_next[index:2*index].reshape((Nz, Ny, Nx), order='F')
-    Nm = u_next[2*index:3*index].reshape((Nz, Ny, Nx), order='F')
-    p = u_next[3*index:3*index+Nib]
-    p_p = u_next[3*index+Nib:3*index+2*Nib]
-    p_m = u_next[3*index+2*Nib:]
+    Phi_coarse = u_next_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    Np_coarse = u_next_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    Nm_coarse = u_next_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    p_coarse = u_next_coarse[3*index_coarse:3*index_coarse+Nib]
+    p_p_coarse = u_next_coarse[3*index_coarse+Nib:3*index_coarse+2*Nib]
+    p_m_coarse = u_next_coarse[3*index_coarse+2*Nib:]
 
-    p_next = u_next[3*index:]
+    Phi_fine = u_next_fine[:index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+    Np_fine = u_next_fine[index_fine:2*index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+    Nm_fine = u_next_fine[2*index_fine:3*index_fine].reshape((nz_fine_patch, ny_fine_patch, nx_fine_patch), order='F')
+    p_fine = u_next_fine[3*index_fine:3*index_fine+Nib]
+    p_p_fine = u_next_fine[3*index_fine+Nib:3*index_fine+2*Nib]
+    p_m_fine = u_next_fine[3*index_fine+2*Nib:]
+
+    p_next_coarse = u_next_coarse[3*index_coarse:]
+    p_next_fine = u_next_fine[3*index_fine:]
     
     # Check convergence
-    res1, res2, res3 = cpeo.apply_Schur_R_3d([p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index)
-    schur_next = np.concatenate([res1, res2, res3])
-    err_curr = np.linalg.norm(schur_next - computedRHS) / np.linalg.norm(computedRHS)
+    [res_1_coarse, res_2_coarse, res_3_coarse], [res_1_fine, res_2_fine, res_3_fine] = cpeo.apply_Schur_R_3d_double_grid([p_coarse, p_p_coarse, p_m_coarse], [p_fine, p_p_fine, p_m_fine], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
+    
+    schur_next_coarse = np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse])
+    schur_next_fine = np.concatenate([res_1_fine, res_2_fine, res_3_fine])
+    err_curr_coarse = np.linalg.norm(schur_next_coarse - computedRHS_coarse) / np.linalg.norm(computedRHS_coarse)
+    err_curr_fine = np.linalg.norm(schur_next_fine - computedRHS_fine) / np.linalg.norm(computedRHS_fine)
     
     # # Check convergence
     # RHS_check = b_Op_3d(u_next)
@@ -840,220 +922,224 @@ for inner_its in range(100000):
     # err_curr = np.linalg.norm(LHS_check - RHS_check) / np.linalg.norm(RHS_check)
     # print(f'Residual: {err_curr}')
 
-    err.append(err_curr)
+    err_coarse.append(err_curr_coarse)
+    err_fine.append(err_curr_fine)
     
-    print(f'Iteration {inner_its}: residual = {err_curr}')
+    print(f'Iteration {inner_its}: coarse residual = {err_curr_coarse}')
+    print(f'Iteration {inner_its}: fine residual = {err_curr_fine}')
     
-    if err_curr < 5e-3:
+    if err_curr_coarse < 5e-3 or err_curr_fine < 5e-3:
         print('Rphi = rho Converged!')
         break
 
 # Save results
-savemat('Full_System_3d.mat', {
-    'ctxt_Rphi': ctxt,
-    'u_next': u_next,
+savemat('Full_System_3d_Double_Grid.mat', {
+    'u_next_coarse': u_next_coarse,
+    'u_next_fine': u_next_fine,
     'Xint': Xint,
     'Yint': Yint,
     'xib': xib,
     'yib': yib,
-    'Phi': Phi,
-    'Np': Np,
-    'Nm': Nm,
-    'err': np.array(err)
+    'Phi_coarse': Phi_coarse,
+    'Np_coarse': Np_coarse,
+    'Nm_coarse': Nm_coarse,
+    'Phi_fine': Phi_fine,
+    'Np_fine': Np_fine,
+    'Nm_fine': Nm_fine
 })
 
-# Create a structured grid
-grid = pv.StructuredGrid(X, Y, Z)
+# # Create a structured grid
+# grid = pv.StructuredGrid(X, Y, Z)
 
-# Add the scalar fields
-grid['Phi_solved'] = Phi.ravel(order='F')
-grid['Np_solved'] = Np.ravel(order='F')
-grid['Nm_solved'] = Nm.ravel(order='F')
+# # Add the scalar fields
+# grid['Phi_solved'] = Phi.ravel(order='F')
+# grid['Np_solved'] = Np.ravel(order='F')
+# grid['Nm_solved'] = Nm.ravel(order='F')
 
-# Plot Phi_solved
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Phi_solved', show_scalar_bar=True)
-plotter.show(title='Phi_solved')
+# # Plot Phi_solved
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Phi_solved', show_scalar_bar=True)
+# plotter.show(title='Phi_solved')
 
-# Plot Np_solved
-plotter = pv.Plotter()
-# Get the scalar values
-scalars = grid['Np_solved']
+# # Plot Np_solved
+# plotter = pv.Plotter()
+# # Get the scalar values
+# scalars = grid['Np_solved']
 
-# Create opacity array: transparent if |value - 1| < 0.001, else opaque
-opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+# # Create opacity array: transparent if |value - 1| < 0.001, else opaque
+# opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
 
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Np_solved', opacity=opacity, show_scalar_bar=True)
-plotter.show(title='Np_solved')
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Np_solved', opacity=opacity, show_scalar_bar=True)
+# plotter.show(title='Np_solved')
 
-# Plot Npm_exact
-plotter = pv.Plotter()
-# Get the scalar values
-scalars = grid['Nm_solved']
+# # Plot Npm_exact
+# plotter = pv.Plotter()
+# # Get the scalar values
+# scalars = grid['Nm_solved']
 
-# Create opacity array: transparent if |value - 1| < 0.001, else opaque
-opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
+# # Create opacity array: transparent if |value - 1| < 0.001, else opaque
+# opacity = np.where(np.abs(scalars - 1) < 0.001, 0.0, 1.0)
 
-plotter = pv.Plotter()
-plotter.add_mesh(grid, scalars='Nm_solved', opacity=opacity, show_scalar_bar=True)
-plotter.show(title='Nm_solved')
+# plotter = pv.Plotter()
+# plotter.add_mesh(grid, scalars='Nm_solved', opacity=opacity, show_scalar_bar=True)
+# plotter.show(title='Nm_solved')
     
-    # ctxt = u_next.copy()
+#     # ctxt = u_next.copy()
     
-    # # compute body forces 
-    # Phi_full = np.zeros((Ny+2, Nx+2))
-    # Np_full = np.ones((Ny+2, Nx+2))
-    # Nm_full = np.ones((Ny+2, Nx+2))
+#     # # compute body forces 
+#     # Phi_full = np.zeros((Ny+2, Nx+2))
+#     # Np_full = np.ones((Ny+2, Nx+2))
+#     # Nm_full = np.ones((Ny+2, Nx+2))
 
-    # Phi_full[1:-1, 1:-1] = Phi
-    # Phi_full[1:-1, 0] = Phi[:, -1]
-    # Phi_full[1:-1, -1] = Phi[:, -1]
-    # Phi_full[0, 1:-1] = -25
-    # Phi_full[-1, 1:-1] = 25
-    # Np_full[1:-1, 1:-1] = Np
-    # Nm_full[1:-1, 1:-1] = Nm
+#     # Phi_full[1:-1, 1:-1] = Phi
+#     # Phi_full[1:-1, 0] = Phi[:, -1]
+#     # Phi_full[1:-1, -1] = Phi[:, -1]
+#     # Phi_full[0, 1:-1] = -25
+#     # Phi_full[-1, 1:-1] = 25
+#     # Np_full[1:-1, 1:-1] = Np
+#     # Nm_full[1:-1, 1:-1] = Nm
 
-    # Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
-    # Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
+#     # Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
+#     # Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
 
-    # Np_relevant_y = Np_full[1:-1,:]
-    # Nm_relevant_y = Nm_full[1:-1,:]
-    # Np_relevant_x = Np_full[:,1:-1]
-    # Nm_relevant_x = Nm_full[:,1:-1]
+#     # Np_relevant_y = Np_full[1:-1,:]
+#     # Nm_relevant_y = Nm_full[1:-1,:]
+#     # Np_relevant_x = Np_full[:,1:-1]
+#     # Nm_relevant_x = Nm_full[:,1:-1]
 
-    # bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-    # bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+#     # bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
+#     # bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
 
-    # body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
-    # body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
-    # body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
-    # body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
+#     # body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
+#     # body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
+#     # body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
+#     # body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
 
-    # ################################
-    # #####  solve N*u = F(phi)  #####
-    # ################################
+#     # ################################
+#     # #####  solve N*u = F(phi)  #####
+#     # ################################
 
-    # # RHS
-    # f = body_interpolated_x.ravel(order='F')
-    # g = body_interpolated_y.ravel(order='F')
+#     # # RHS
+#     # f = body_interpolated_x.ravel(order='F')
+#     # g = body_interpolated_y.ravel(order='F')
 
-    # f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
-    # g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
+#     # f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
+#     # g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-    # U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
-    # #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+#     # U, V, P, lam_X, lam_Y = stokes.solve_factorized(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+#     # #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
-    # Uplot = U.reshape((Ny + 1, Nx), order='F')
-    # Vplot = V.reshape((Ny, Nx + 1), order='F')
-    # Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
+#     # Uplot = U.reshape((Ny + 1, Nx), order='F')
+#     # Vplot = V.reshape((Ny, Nx + 1), order='F')
+#     # Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
 
-    # U_interpolated = np.zeros([Ny, Nx])
-    # V_interpolated = np.zeros([Ny, Nx])
-    # for col_index in range(Uplot.shape[1]):
-    #     col = Uplot[:, col_index]
-    #     for row_index in range(len(col) - 1):
-    #         midpoint = (col[row_index] + col[row_index+1]) / 2
-    #         U_interpolated[row_index, col_index] = midpoint
+#     # U_interpolated = np.zeros([Ny, Nx])
+#     # V_interpolated = np.zeros([Ny, Nx])
+#     # for col_index in range(Uplot.shape[1]):
+#     #     col = Uplot[:, col_index]
+#     #     for row_index in range(len(col) - 1):
+#     #         midpoint = (col[row_index] + col[row_index+1]) / 2
+#     #         U_interpolated[row_index, col_index] = midpoint
 
-    # for row_index in range(Vplot.shape[0]):
-    #     row = Vplot[row_index, :]
-    #     for col_index in range(len(row) - 1):
-    #         midpoint = (row[col_index] + row[col_index+1]) / 2
-    #         V_interpolated[row_index, col_index] = midpoint
+#     # for row_index in range(Vplot.shape[0]):
+#     #     row = Vplot[row_index, :]
+#     #     for col_index in range(len(row) - 1):
+#     #         midpoint = (row[col_index] + row[col_index+1]) / 2
+#     #         V_interpolated[row_index, col_index] = midpoint
 
-    # UFull = np.zeros((Ny + 2, Nx + 2))
-    # UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
+#     # UFull = np.zeros((Ny + 2, Nx + 2))
+#     # UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
 
-    # VFull = np.zeros((Ny + 2, Nx + 2))
-    # VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
+#     # VFull = np.zeros((Ny + 2, Nx + 2))
+#     # VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
 
-    # U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
-    # V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+#     # U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+#     # V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
 
-    # residual_check_RHS = b_Op(u_next, U_fluid, V_fluid)
-    # residual_check_AxOp = AxOp(u_next)
-    # residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
-    # print(f'New residual Rphi = {residual_check}')
+#     # residual_check_RHS = b_Op(u_next, U_fluid, V_fluid)
+#     # residual_check_AxOp = AxOp(u_next)
+#     # residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
+#     # print(f'New residual Rphi = {residual_check}')
 
-    # if residual_check < 1e-4:
-    #     print('Full system converged!')
-    #     break
+#     # if residual_check < 1e-4:
+#     #     print('Full system converged!')
+#     #     break
 
-# check Nu residual 
-Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
-Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, cut)
-residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
-print(f'New residual Nu = {residual_check_N}')
+# # check Nu residual 
+# Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
+# u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
+# Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, cut)
+# residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
+# print(f'New residual Nu = {residual_check_N}')
 
-# check system residual
-full_system_operator_applied = np.concatenate([Nu, residual_check_AxOp])
-full_system_RHS = np.concatenate([Nu_RHS, residual_check_RHS])
-residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_RHS) / np.linalg.norm(full_system_RHS)
-print(f'Full residual = {residual_check_full}')
+# # check system residual
+# full_system_operator_applied = np.concatenate([Nu, residual_check_AxOp])
+# full_system_RHS = np.concatenate([Nu_RHS, residual_check_RHS])
+# residual_check_full = np.linalg.norm(full_system_operator_applied - full_system_RHS) / np.linalg.norm(full_system_RHS)
+# print(f'Full residual = {residual_check_full}')
 
-# end profiling
-pr.disable()
-pr.dump_stats("profile_fast.prof")
+# # end profiling
+# pr.disable()
+# pr.dump_stats("profile_fast.prof")
 
-###################################
-#######  SAVE/PLOT RESULTS  #######
-###################################
+# ###################################
+# #######  SAVE/PLOT RESULTS  #######
+# ###################################
 
-# # Save results
-# savemat('Full_System_Results_Block_Lap.mat', {
-#     'ctxt_Rphi': ctxt,
-#     'u_next': u_next,
-#     'Xint': Xint,
-#     'Yint': Yint,
-#     'xib': xib,
-#     'yib': yib,
-#     'Phi': Phi,
-#     'Np': Np,
-#     'Nm': Nm,
-#     'err': np.array(err),
-#     'U_fluid': UFull,
-#     'V_fluid': VFull,
-#     'P_fluid': Pplot,
-#     'lam_X': lam_X,
-#     'lam_Y': lam_Y
-# })
+# # # Save results
+# # savemat('Full_System_Results_Block_Lap.mat', {
+# #     'ctxt_Rphi': ctxt,
+# #     'u_next': u_next,
+# #     'Xint': Xint,
+# #     'Yint': Yint,
+# #     'xib': xib,
+# #     'yib': yib,
+# #     'Phi': Phi,
+# #     'Np': Np,
+# #     'Nm': Nm,
+# #     'err': np.array(err),
+# #     'U_fluid': UFull,
+# #     'V_fluid': VFull,
+# #     'P_fluid': Pplot,
+# #     'lam_X': lam_X,
+# #     'lam_Y': lam_Y
+# # })
 
-# Define circular mask (radius 0.25 centered at origin)
-radius = 0.25
-mask = (X**2 + Y**2) <= radius**2
+# # Define circular mask (radius 0.25 centered at origin)
+# radius = 0.25
+# mask = (X**2 + Y**2) <= radius**2
 
-# Apply mask to UFull and VFull
-UFull[mask] = np.nan
-VFull[mask] = np.nan
+# # Apply mask to UFull and VFull
+# UFull[mask] = np.nan
+# VFull[mask] = np.nan
 
-plt.figure(figsize=(8, 6))
-plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
-plt.xlabel('X-coordinate')
-plt.ylabel('Y-coordinate')
-plt.title('Flow Field Streamline Plot')
-plt.xlim(-2, 2)
-plt.ylim(-2, 2)
-plt.grid(True)
+# plt.figure(figsize=(8, 6))
+# plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
+# plt.xlabel('X-coordinate')
+# plt.ylabel('Y-coordinate')
+# plt.title('Flow Field Streamline Plot')
+# plt.xlim(-2, 2)
+# plt.ylim(-2, 2)
+# plt.grid(True)
 
-cmap = plt.cm.spring
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(X, Y, UFull, cmap=cmap, edgecolor='none')
-ax.set_title("U")
-ax.set_xlabel("x"); ax.set_ylabel("y")
+# cmap = plt.cm.spring
+# fig = plt.figure()
+# ax = fig.add_subplot(111, projection="3d")
+# ax.plot_surface(X, Y, UFull, cmap=cmap, edgecolor='none')
+# ax.set_title("U")
+# ax.set_xlabel("x"); ax.set_ylabel("y")
 
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
-ax.set_title("V")
-ax.set_xlabel("x"); ax.set_ylabel("y")
+# fig = plt.figure()
+# ax = fig.add_subplot(111, projection="3d")
+# ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
+# ax.set_title("V")
+# ax.set_xlabel("x"); ax.set_ylabel("y")
 
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
-ax.set_title("|velocity|")
-ax.set_xlabel("x"); ax.set_ylabel("y")
+# fig = plt.figure()
+# ax = fig.add_subplot(111, projection="3d")
+# ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
+# ax.set_title("|velocity|")
+# ax.set_xlabel("x"); ax.set_ylabel("y")
 
-plt.show()
+# plt.show()

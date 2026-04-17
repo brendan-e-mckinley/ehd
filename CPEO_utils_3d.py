@@ -672,6 +672,31 @@ def apply_Schur_R(dLap, p_blocks, delta_layer, Nx, Ny, Sop_prime, Jop_prime):
 
     return [res_1, res_2, res_3]
 
+def apply_Schur_R_3d_double_grid(p_blocks_coarse, p_blocks_fine, ctxt_BCs, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz_coarse):
+    p_coarse, p_p_coarse, p_m_coarse = p_blocks_coarse
+    p_fine, p_p_fine, p_m_fine = p_blocks_fine
+
+    # apply B 
+    Bp_coarse = Sop_prime(p_coarse)
+    Bp_p_coarse = Sop_prime(p_p_coarse)
+    Bp_m_coarse = Sop_prime(p_m_coarse)
+    Bp_fine = Sop_prime(p_fine)
+    Bp_p_fine = Sop_prime(p_p_fine)
+    Bp_m_fine = Sop_prime(p_m_fine)
+
+    # apply A inverse 
+    [Ainv_Bp_coarse, Ainv_Bp_p_coarse, Ainv_Bp_m_coarse], [Ainv_Bp_fine, Ainv_Bp_p_fine, Ainv_Bp_m_fine] = apply_Ainv_R_3d_bcs_double_grid([Bp_coarse, Bp_p_coarse, Bp_m_coarse], [Bp_fine, Bp_p_fine, Bp_m_fine], ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz_coarse)
+
+    # apply C 
+    res_1_coarse = delta_layer * Jop_prime(Ainv_Bp_coarse)
+    res_2_coarse = Jop_prime(Ainv_Bp_p_coarse)
+    res_3_coarse = Jop_prime(Ainv_Bp_m_coarse)
+    res_1_fine= delta_layer * Jop_prime_fine(Ainv_Bp_fine)
+    res_2_fine = Jop_prime_fine(Ainv_Bp_p_fine)
+    res_3_fine = Jop_prime_fine(Ainv_Bp_m_fine)
+
+    return [res_1_coarse, res_2_coarse, res_3_coarse], [res_1_fine, res_2_fine, res_3_fine]
+
 def apply_Schur_R_3d(p_blocks, ctxt_BCs, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz):
     p, p_p, p_m = p_blocks
 
@@ -723,6 +748,25 @@ def apply_Ainv_R_3d(target_vec, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
+def apply_Ainv_R_3d_double_grid(target_vec_coarse, target_vec_fine, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    target_vec_coarse_1, target_vec_coarse_2, target_vec_coarse_3 = target_vec_coarse
+    target_vec_fine_1, target_vec_fine_2, target_vec_fine_3 = target_vec_fine
+
+    zero_bcs = np.zeros_like(target_vec_coarse_1)
+
+    dl2 = delta_layer**2
+
+    # second and third blocks are straightforward
+    result_vec_2_coarse, result_vec_2_fine = amr_solve.solve_poisson_double_grid(target_vec_coarse_2, target_vec_fine_2, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    result_vec_3_coarse, result_vec_3_fine = amr_solve.solve_poisson_double_grid(target_vec_coarse_3, target_vec_fine_3, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    # use these results to compute first block 
+    rhs_coarse = target_vec_coarse_1 - 0.5 * result_vec_2_coarse + 0.5 * result_vec_3_coarse
+    rhs_fine = target_vec_fine_1 - 0.5 * result_vec_2_fine + 0.5 * result_vec_3_fine
+    result_vec_1_coarse, result_vec_1_fine = amr_solve.solve_poisson_double_grid(rhs_coarse / dl2, rhs_fine / dl2, zero_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    return [result_vec_1_coarse, result_vec_2_coarse, result_vec_3_coarse], [result_vec_1_fine, result_vec_2_fine, result_vec_3_fine] 
+
 def apply_Ainv_R_3d_bcs(target_vec, ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz):
     target_vec_1, target_vec_2, target_vec_3 = target_vec
 
@@ -747,6 +791,28 @@ def apply_Ainv_R_3d_bcs(target_vec, ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_h
     result_vec_1 = amr_solve.solve_poisson(rhs / dl2, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
 
     return [result_vec_1, result_vec_2, result_vec_3]
+
+def apply_Ainv_R_3d_bcs_double_grid(target_vec_coarse, target_vec_fine, ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz):
+    target_vec_coarse_1, target_vec_coarse_2, target_vec_coarse_3 = target_vec_coarse
+    target_vec_fine_1, target_vec_fine_2, target_vec_fine_3 = target_vec_fine
+
+    ## SPECIFIC BCS
+    Phi_bcs = (ctxt_BCs[:sz]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz:2*sz]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz:3*sz]).reshape(Nz, Ny, Nx, order='F')
+
+    dl2 = delta_layer**2
+
+    # second and third blocks are straightforward
+    result_vec_2_coarse, result_vec_2_fine = amr_solve.solve_poisson_double_grid(target_vec_coarse_2, target_vec_fine_2, N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    result_vec_3_coarse, result_vec_3_fine = amr_solve.solve_poisson_double_grid(target_vec_coarse_3, target_vec_fine_3, N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    # use these results to compute first block 
+    rhs_coarse = target_vec_coarse_1 - 0.5 * result_vec_2_coarse + 0.5 * result_vec_3_coarse
+    rhs_fine = target_vec_fine_1 - 0.5 * result_vec_2_fine + 0.5 * result_vec_3_fine
+    result_vec_1_coarse, result_vec_1_fine = amr_solve.solve_poisson_double_grid(rhs_coarse / dl2, rhs_fine / dl2, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    return [result_vec_1_coarse, result_vec_2_coarse, result_vec_3_coarse], [result_vec_1_fine, result_vec_2_fine, result_vec_3_fine] 
 
 def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Jop, Jop_prime):
     dl2 = delta_layer**2
@@ -795,6 +861,68 @@ def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, Nib, x_lo,
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m_reshaped) * Jop_prime(Phi_reshaped)
     
     return b_Ctx
+
+def Build_RHS_Schur_System_3d_double_grid(ctxt_coarse, ctxt_fine, ctxt_BCs, G_d_G, G_d_G_fine, delta_layer, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib, Jop, Jop_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+    b_Ctx_coarse = np.zeros_like(ctxt_coarse)
+    b_Ctx_fine = np.zeros_like(ctxt_fine)
+    
+    # indexing
+    sz_coarse = Nx * Ny * Nz
+    sz_fine = nx_fine * ny_fine * nz_fine
+    q_index_coarse = 3 * sz_coarse
+    q_index_fine = 3 * sz_fine
+
+    # scalar constants
+    dl2 = delta_layer**2
+
+    # coarse
+    Phi_coarse = ctxt_coarse[:sz_coarse]
+    N_p_coarse = ctxt_coarse[sz_coarse:2*sz_coarse]
+    N_m_coarse = ctxt_coarse[2*sz_coarse:3*sz_coarse]
+
+    Phi_coarse_reshaped = Phi_coarse.reshape(Nz, Ny, Nx, order='F')
+    N_p_coarse_reshaped = N_p_coarse.reshape(Nz, Ny, Nx, order='F')
+    N_m_coarse_reshaped = N_m_coarse.reshape(Nz, Ny, Nx, order='F')
+
+    # fine
+    Phi_fine = ctxt_fine[:sz_fine]
+    N_p_fine = ctxt_fine[sz_fine:2*sz_fine]
+    N_m_fine = ctxt_fine[2*sz_fine:3*sz_fine]
+
+    Phi_fine_reshaped = Phi_fine.reshape(nz_fine, ny_fine, nx_fine, order='F')
+    N_p_fine_reshaped = N_p_fine.reshape(nz_fine, ny_fine, nx_fine, order='F')
+    N_m_fine_reshaped = N_m_fine.reshape(nz_fine, ny_fine, nx_fine, order='F')
+
+    # bcs
+    Phi_bcs = (ctxt_BCs[:sz_coarse]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz_coarse:2*sz_coarse]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz_coarse:3*sz_coarse]).reshape(Nz, Ny, Nx, order='F')
+
+    # # compute some derivatives we use on the RHS
+    # computed_lap_int = amr_solve.apply_poisson(Phi_reshaped, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    # # Trying something hacky just to see if it fixes it
+    # computed_lap = np.zeros_like(Phi_reshaped)
+    # computed_lap[1:-1,1:-1,1:-1] = computed_lap_int[1:-1,1:-1,1:-1]
+
+    computed_lap_coarse, computed_lap_fine = amr_solve.apply_poisson(Phi_coarse_reshaped, Phi_fine_reshaped, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    # advection terms when we get there
+
+    b_Ctx_coarse[:sz_coarse] = np.zeros_like(Phi_coarse)
+    b_Ctx_coarse[sz_coarse:2*sz_coarse] =  -N_p_coarse * computed_lap_coarse.ravel(order='F') - G_d_G(Phi_coarse, N_p_coarse)
+    b_Ctx_coarse[2*sz_coarse:3*sz_coarse] =  N_m_coarse * computed_lap_coarse.ravel(order='F') + G_d_G(Phi_coarse, N_m_coarse)
+    b_Ctx_coarse[q_index_coarse:q_index_coarse+Nib] = delta_layer * Jop_prime(Phi_coarse_reshaped)
+    b_Ctx_coarse[q_index_coarse+Nib:q_index_coarse+2*Nib] = -Jop(N_p_coarse_reshaped) * Jop_prime(Phi_coarse_reshaped)
+    b_Ctx_coarse[q_index_coarse+2*Nib:q_index_coarse+3*Nib] = Jop(N_m_coarse_reshaped) * Jop_prime(Phi_coarse_reshaped)
+
+    b_Ctx_fine[:sz_fine] = np.zeros_like(Phi_fine)
+    b_Ctx_fine[sz_fine:2*sz_fine] =  -N_p_fine * computed_lap_fine.ravel(order='F') - G_d_G_fine(Phi_fine, N_p_fine)
+    b_Ctx_fine[2*sz_fine:3*sz_fine] =  N_m_fine * computed_lap_fine.ravel(order='F') + G_d_G_fine(Phi_fine, N_m_fine)
+    b_Ctx_fine[q_index_fine:q_index_fine+Nib] = delta_layer * Jop_prime_fine(Phi_fine_reshaped)
+    b_Ctx_fine[q_index_fine+Nib:q_index_fine+2*Nib] = -Jop_fine(N_p_fine_reshaped) * Jop_prime_fine(Phi_fine_reshaped)
+    b_Ctx_fine[q_index_fine+2*Nib:q_index_fine+3*Nib] = Jop_fine(N_m_fine_reshaped) * Jop_prime_fine(Phi_fine_reshaped)
+
+    return b_Ctx_coarse, b_Ctx_fine
 
 def Build_RHS_Schur_System_3d(ctxt, ctxt_BCs, G_d_G, delta_layer, Nx, Ny, Nz, Nib, Jop, Jop_prime, Sop_prime, dx, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
     b_Ctx = np.zeros_like(ctxt_BCs)
@@ -1296,6 +1424,46 @@ def schur_rhs_R_3d(rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo,
 
     return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
 
+def schur_rhs_R_3d_double_grid(rhs_coarse, rhs_fine, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine):
+    sz_coarse = Nx * Ny * Nz
+    q_index_coarse = 3 * sz_coarse
+    sz_fine = nx_fine * ny_fine * nz_fine
+    q_index_fine = 3 * sz_fine
+
+    rhs_coarse_1 = rhs_coarse[:sz_coarse]
+    rhs_coarse_2 = rhs_coarse[sz_coarse:2*sz_coarse]
+    rhs_coarse_3 = rhs_coarse[2*sz_coarse:3*sz_coarse]
+    rhs_coarse_4 = rhs_coarse[q_index_coarse:q_index_coarse+Nib]
+    rhs_coarse_5 = rhs_coarse[q_index_coarse+Nib:q_index_coarse+2*Nib]
+    rhs_coarse_6 = rhs_coarse[q_index_coarse+2*Nib:q_index_coarse+3*Nib]
+
+    rhs_fine_1 = rhs_fine[:sz_fine]
+    rhs_fine_2 = rhs_fine[sz_fine:2*sz_fine]
+    rhs_fine_3 = rhs_fine[2*sz_fine:3*sz_fine]
+    rhs_fine_4 = rhs_fine[q_index_fine:q_index_fine+Nib]
+    rhs_fine_5 = rhs_fine[q_index_fine+Nib:q_index_fine+2*Nib]
+    rhs_fine_6 = rhs_fine[q_index_fine+2*Nib:q_index_fine+3*Nib]
+
+    [Ainv_phi_coarse, Ainv_n_p_coarse, Ainv_n_m_coarse], [Ainv_phi_fine, Ainv_n_p_fine, Ainv_n_m_fine] = apply_Ainv_R_3d_double_grid([rhs_coarse_1.reshape(Nz, Ny, Nx, order='F'), rhs_coarse_2.reshape(Nz, Ny, Nx, order='F'), rhs_coarse_3.reshape(Nz, Ny, Nx, order='F')], [rhs_fine_1.reshape(nz_fine, ny_fine, nx_fine, order='F'), rhs_fine_2.reshape(nz_fine, ny_fine, nx_fine, order='F'), rhs_fine_3.reshape(nz_fine, ny_fine, nx_fine, order='F')], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    
+    CAinv_phi_coarse = delta_layer * Jop_prime(Ainv_phi_coarse.reshape(Nz, Ny, Nx, order='F'))
+    CAinv_n_p_coarse = Jop_prime(Ainv_n_p_coarse.reshape(Nz, Ny, Nx, order='F'))
+    CAinv_n_m_coarse = Jop_prime(Ainv_n_m_coarse.reshape(Nz, Ny, Nx, order='F'))
+
+    CAinv_phi_fine = delta_layer * Jop_prime_fine(Ainv_phi_fine.reshape(nz_fine, ny_fine, nx_fine, order='F'))
+    CAinv_n_p_fine = Jop_prime_fine(Ainv_n_p_fine.reshape(nz_fine, ny_fine, nx_fine, order='F'))
+    CAinv_n_m_fine = Jop_prime_fine(Ainv_n_m_fine.reshape(nz_fine, ny_fine, nx_fine, order='F'))
+
+    schur_rhs_1_coarse = CAinv_phi_coarse - rhs_coarse_4
+    schur_rhs_2_coarse = CAinv_n_p_coarse - rhs_coarse_5
+    schur_rhs_3_coarse = CAinv_n_m_coarse - rhs_coarse_6
+
+    schur_rhs_1_fine = CAinv_phi_fine - rhs_fine_4
+    schur_rhs_2_fine = CAinv_n_p_fine - rhs_fine_5
+    schur_rhs_3_fine = CAinv_n_m_fine - rhs_fine_6
+
+    return np.concatenate((schur_rhs_1_coarse, schur_rhs_2_coarse, schur_rhs_3_coarse)), np.concatenate((schur_rhs_1_fine, schur_rhs_2_fine, schur_rhs_3_fine))
+
 def post_processing_compute_R(dLap, p_block, rhs, Nx, Ny, Nib, delta_layer, Sop_prime):
     sz = Nx * Ny
 
@@ -1350,6 +1518,48 @@ def post_processing_compute_R_3d(p_block, rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, 
     phi = amr_solve.solve_poisson(rhs_phi, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, 0.3)
 
     return np.concatenate((phi.ravel(order='F'), n_p.ravel(order='F'), n_m.ravel(order='F'), p, p_p, p_m))
+
+def post_processing_compute_R_3d_double_grid(p_block_coarse, p_block_fine, rhs_coarse, rhs_fine, ctxt_BCs, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine):
+    sz_coarse = Nx * Ny * Nz
+    sz_fine = nx_fine * ny_fine * nz_fine
+    dl2 = delta_layer**2
+
+    p_coarse = p_block_coarse[0:Nib]
+    p_p_coarse = p_block_coarse[Nib:2*Nib]
+    p_m_coarse = p_block_coarse[2*Nib:3*Nib]
+
+    p_fine = p_block_fine[0:Nib]
+    p_p_fine = p_block_fine[Nib:2*Nib]
+    p_m_fine = p_block_fine[2*Nib:3*Nib]
+
+    rhs_1_coarse = rhs_coarse[:sz_coarse]
+    rhs_2_coarse = rhs_coarse[sz_coarse:2*sz_coarse]
+    rhs_3_coarse = rhs_coarse[2*sz_coarse:3*sz_coarse]
+
+    rhs_1_fine = rhs_fine[:sz_fine]
+    rhs_2_fine = rhs_fine[sz_fine:2*sz_fine]
+    rhs_3_fine = rhs_fine[2*sz_fine:3*sz_fine]
+
+    Phi_bcs = (ctxt_BCs[:sz_coarse]).reshape(Nz, Ny, Nx, order='F')
+    N_p_bcs = (ctxt_BCs[sz_coarse:2*sz_coarse]).reshape(Nz, Ny, Nx, order='F')
+    N_m_bcs = (ctxt_BCs[2*sz_coarse:3*sz_coarse]).reshape(Nz, Ny, Nx, order='F')
+
+    # get rhs for what we already know how to solve
+    rhs_n_p_coarse = rhs_2_coarse - Sop_prime(p_p_coarse).ravel(order='F')
+    rhs_n_m_coarse = rhs_3_coarse - Sop_prime(p_m_coarse).ravel(order='F')
+
+    rhs_n_p_fine = rhs_2_fine - Sop_prime_fine(p_p_fine).ravel(order='F')
+    rhs_n_m_fine = rhs_3_fine - Sop_prime_fine(p_m_fine).ravel(order='F')
+
+    n_p_coarse, n_p_fine = amr_solve.solve_poisson_double_grid(rhs_n_p_coarse.reshape(Nz, Ny, Nx, order='F'), rhs_n_p_fine.reshape(nz_fine, ny_fine, nx_fine, order='F'), N_p_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    n_m_coarse, n_m_fine = amr_solve.solve_poisson_double_grid(rhs_n_m_coarse.reshape(Nz, Ny, Nx, order='F'), rhs_n_m_fine.reshape(nz_fine, ny_fine, nx_fine, order='F'), N_m_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    rhs_phi_coarse = (rhs_1_coarse.reshape(Nz, Ny, Nx, order='F') - 0.5*n_p_coarse + 0.5*n_m_coarse - Sop_prime(p_coarse)) / dl2
+    rhs_phi_fine = (rhs_1_fine.reshape(Nz, Ny, Nx, order='F') - 0.5*n_p_fine + 0.5*n_m_fine - Sop_prime_fine(p_fine)) / dl2
+
+    phi_coarse, phi_fine = amr_solve.solve_poisson_double_grid(rhs_phi_coarse, rhs_phi_fine, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+    return np.concatenate((phi_coarse.ravel(order='F'), n_p_coarse.ravel(order='F'), n_m_coarse.ravel(order='F'), p_coarse, p_p_coarse, p_m_coarse)), np.concatenate((phi_fine.ravel(order='F'), n_p_fine.ravel(order='F'), n_m_fine.ravel(order='F'), p_fine, p_p_fine, p_m_fine))
 
 @jit(nopython=True)
 def solve_from_svd(U, Sigma, Vh, rhs):
