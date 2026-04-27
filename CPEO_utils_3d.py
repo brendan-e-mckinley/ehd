@@ -680,9 +680,9 @@ def apply_Schur_R_3d_double_grid(p_blocks_coarse, p_blocks_fine, ctxt_BCs, delta
     Bp_coarse = Sop_prime(p_coarse)
     Bp_p_coarse = Sop_prime(p_p_coarse)
     Bp_m_coarse = Sop_prime(p_m_coarse)
-    Bp_fine = Sop_prime(p_fine)
-    Bp_p_fine = Sop_prime(p_p_fine)
-    Bp_m_fine = Sop_prime(p_m_fine)
+    Bp_fine = Sop_prime_fine(p_fine)
+    Bp_p_fine = Sop_prime_fine(p_p_fine)
+    Bp_m_fine = Sop_prime_fine(p_m_fine)
 
     # apply A inverse 
     [Ainv_Bp_coarse, Ainv_Bp_p_coarse, Ainv_Bp_m_coarse], [Ainv_Bp_fine, Ainv_Bp_p_fine, Ainv_Bp_m_fine] = apply_Ainv_R_3d_bcs_double_grid([Bp_coarse, Bp_p_coarse, Bp_m_coarse], [Bp_fine, Bp_p_fine, Bp_m_fine], ctxt_BCs, delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz_coarse)
@@ -862,7 +862,7 @@ def Build_RHS_3d(ctxt, ctxt_BCs, Lap, G_d_G, delta_layer, Nx, Ny, Nz, Nib, x_lo,
     
     return b_Ctx
 
-def Build_RHS_Schur_System_3d_double_grid(ctxt_coarse, ctxt_fine, ctxt_BCs, G_d_G, G_d_G_fine, delta_layer, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib, Jop, Jop_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
+def Build_RHS_Schur_System_3d_double_grid(ctxt_coarse, ctxt_fine, ctxt_BCs, G_d_G, G_d_G_fine, delta_layer, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib_coarse, Nib_fine, Jop, Jop_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi):
     b_Ctx_coarse = np.zeros_like(ctxt_coarse)
     b_Ctx_fine = np.zeros_like(ctxt_fine)
     
@@ -904,23 +904,27 @@ def Build_RHS_Schur_System_3d_double_grid(ctxt_coarse, ctxt_fine, ctxt_BCs, G_d_
     # computed_lap = np.zeros_like(Phi_reshaped)
     # computed_lap[1:-1,1:-1,1:-1] = computed_lap_int[1:-1,1:-1,1:-1]
 
-    computed_lap_coarse, computed_lap_fine = amr_solve.apply_poisson(Phi_coarse_reshaped, Phi_fine_reshaped, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    computed_lap_coarse_int, computed_lap_fine_int = amr_solve.apply_poisson(Phi_coarse_reshaped, Phi_fine_reshaped, Phi_bcs, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+    computed_lap_coarse = np.zeros_like(Phi_coarse_reshaped)
+    computed_lap_coarse[1:-1,1:-1,1:-1] = computed_lap_coarse_int[1:-1,1:-1,1:-1]
+    computed_lap_fine = np.zeros_like(Phi_fine_reshaped)
+    computed_lap_fine[1:-1,1:-1,1:-1] = computed_lap_fine_int[1:-1,1:-1,1:-1]
 
     # advection terms when we get there
 
     b_Ctx_coarse[:sz_coarse] = np.zeros_like(Phi_coarse)
     b_Ctx_coarse[sz_coarse:2*sz_coarse] =  -N_p_coarse * computed_lap_coarse.ravel(order='F') - G_d_G(Phi_coarse, N_p_coarse)
     b_Ctx_coarse[2*sz_coarse:3*sz_coarse] =  N_m_coarse * computed_lap_coarse.ravel(order='F') + G_d_G(Phi_coarse, N_m_coarse)
-    b_Ctx_coarse[q_index_coarse:q_index_coarse+Nib] = delta_layer * Jop_prime(Phi_coarse_reshaped)
-    b_Ctx_coarse[q_index_coarse+Nib:q_index_coarse+2*Nib] = -Jop(N_p_coarse_reshaped) * Jop_prime(Phi_coarse_reshaped)
-    b_Ctx_coarse[q_index_coarse+2*Nib:q_index_coarse+3*Nib] = Jop(N_m_coarse_reshaped) * Jop_prime(Phi_coarse_reshaped)
+    b_Ctx_coarse[q_index_coarse:q_index_coarse+Nib_coarse] = delta_layer * Jop_prime(Phi_coarse_reshaped)
+    b_Ctx_coarse[q_index_coarse+Nib_coarse:q_index_coarse+2*Nib_coarse] = -Jop(N_p_coarse_reshaped) * Jop_prime(Phi_coarse_reshaped)
+    b_Ctx_coarse[q_index_coarse+2*Nib_coarse:q_index_coarse+3*Nib_coarse] = Jop(N_m_coarse_reshaped) * Jop_prime(Phi_coarse_reshaped)
 
     b_Ctx_fine[:sz_fine] = np.zeros_like(Phi_fine)
     b_Ctx_fine[sz_fine:2*sz_fine] =  -N_p_fine * computed_lap_fine.ravel(order='F') - G_d_G_fine(Phi_fine, N_p_fine)
     b_Ctx_fine[2*sz_fine:3*sz_fine] =  N_m_fine * computed_lap_fine.ravel(order='F') + G_d_G_fine(Phi_fine, N_m_fine)
-    b_Ctx_fine[q_index_fine:q_index_fine+Nib] = delta_layer * Jop_prime_fine(Phi_fine_reshaped)
-    b_Ctx_fine[q_index_fine+Nib:q_index_fine+2*Nib] = -Jop_fine(N_p_fine_reshaped) * Jop_prime_fine(Phi_fine_reshaped)
-    b_Ctx_fine[q_index_fine+2*Nib:q_index_fine+3*Nib] = Jop_fine(N_m_fine_reshaped) * Jop_prime_fine(Phi_fine_reshaped)
+    b_Ctx_fine[q_index_fine:q_index_fine+Nib_fine] = delta_layer * Jop_prime_fine(Phi_fine_reshaped)
+    b_Ctx_fine[q_index_fine+Nib_fine:q_index_fine+2*Nib_fine] = -Jop_fine(N_p_fine_reshaped) * Jop_prime_fine(Phi_fine_reshaped)
+    b_Ctx_fine[q_index_fine+2*Nib_fine:q_index_fine+3*Nib_fine] = Jop_fine(N_m_fine_reshaped) * Jop_prime_fine(Phi_fine_reshaped)
 
     return b_Ctx_coarse, b_Ctx_fine
 
@@ -1424,7 +1428,7 @@ def schur_rhs_R_3d(rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, x_hi, y_lo, y_hi, z_lo,
 
     return np.concatenate((schur_rhs_1, schur_rhs_2, schur_rhs_3))
 
-def schur_rhs_R_3d_double_grid(rhs_coarse, rhs_fine, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine):
+def schur_rhs_R_3d_double_grid(rhs_coarse, rhs_fine, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine):
     sz_coarse = Nx * Ny * Nz
     q_index_coarse = 3 * sz_coarse
     sz_fine = nx_fine * ny_fine * nz_fine
@@ -1433,16 +1437,16 @@ def schur_rhs_R_3d_double_grid(rhs_coarse, rhs_fine, Nx, Ny, Nz, nx_fine, ny_fin
     rhs_coarse_1 = rhs_coarse[:sz_coarse]
     rhs_coarse_2 = rhs_coarse[sz_coarse:2*sz_coarse]
     rhs_coarse_3 = rhs_coarse[2*sz_coarse:3*sz_coarse]
-    rhs_coarse_4 = rhs_coarse[q_index_coarse:q_index_coarse+Nib]
-    rhs_coarse_5 = rhs_coarse[q_index_coarse+Nib:q_index_coarse+2*Nib]
-    rhs_coarse_6 = rhs_coarse[q_index_coarse+2*Nib:q_index_coarse+3*Nib]
+    rhs_coarse_4 = rhs_coarse[q_index_coarse:q_index_coarse+Nib_coarse]
+    rhs_coarse_5 = rhs_coarse[q_index_coarse+Nib_coarse:q_index_coarse+2*Nib_coarse]
+    rhs_coarse_6 = rhs_coarse[q_index_coarse+2*Nib_coarse:q_index_coarse+3*Nib_coarse]
 
     rhs_fine_1 = rhs_fine[:sz_fine]
     rhs_fine_2 = rhs_fine[sz_fine:2*sz_fine]
     rhs_fine_3 = rhs_fine[2*sz_fine:3*sz_fine]
-    rhs_fine_4 = rhs_fine[q_index_fine:q_index_fine+Nib]
-    rhs_fine_5 = rhs_fine[q_index_fine+Nib:q_index_fine+2*Nib]
-    rhs_fine_6 = rhs_fine[q_index_fine+2*Nib:q_index_fine+3*Nib]
+    rhs_fine_4 = rhs_fine[q_index_fine:q_index_fine+Nib_fine]
+    rhs_fine_5 = rhs_fine[q_index_fine+Nib_fine:q_index_fine+2*Nib_fine]
+    rhs_fine_6 = rhs_fine[q_index_fine+2*Nib_fine:q_index_fine+3*Nib_fine]
 
     [Ainv_phi_coarse, Ainv_n_p_coarse, Ainv_n_m_coarse], [Ainv_phi_fine, Ainv_n_p_fine, Ainv_n_m_fine] = apply_Ainv_R_3d_double_grid([rhs_coarse_1.reshape(Nz, Ny, Nx, order='F'), rhs_coarse_2.reshape(Nz, Ny, Nx, order='F'), rhs_coarse_3.reshape(Nz, Ny, Nx, order='F')], [rhs_fine_1.reshape(nz_fine, ny_fine, nx_fine, order='F'), rhs_fine_2.reshape(nz_fine, ny_fine, nx_fine, order='F'), rhs_fine_3.reshape(nz_fine, ny_fine, nx_fine, order='F')], delta_layer, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
     
@@ -1519,18 +1523,18 @@ def post_processing_compute_R_3d(p_block, rhs, ctxt_BCs, Nx, Ny, Nz, Nib, x_lo, 
 
     return np.concatenate((phi.ravel(order='F'), n_p.ravel(order='F'), n_m.ravel(order='F'), p, p_p, p_m))
 
-def post_processing_compute_R_3d_double_grid(p_block_coarse, p_block_fine, rhs_coarse, rhs_fine, ctxt_BCs, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine):
+def post_processing_compute_R_3d_double_grid(p_block_coarse, p_block_fine, rhs_coarse, rhs_fine, ctxt_BCs, Nx, Ny, Nz, nx_fine, ny_fine, nz_fine, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine):
     sz_coarse = Nx * Ny * Nz
     sz_fine = nx_fine * ny_fine * nz_fine
     dl2 = delta_layer**2
 
-    p_coarse = p_block_coarse[0:Nib]
-    p_p_coarse = p_block_coarse[Nib:2*Nib]
-    p_m_coarse = p_block_coarse[2*Nib:3*Nib]
+    p_coarse = p_block_coarse[0:Nib_coarse]
+    p_p_coarse = p_block_coarse[Nib_coarse:2*Nib_coarse]
+    p_m_coarse = p_block_coarse[2*Nib_coarse:3*Nib_coarse]
 
-    p_fine = p_block_fine[0:Nib]
-    p_p_fine = p_block_fine[Nib:2*Nib]
-    p_m_fine = p_block_fine[2*Nib:3*Nib]
+    p_fine = p_block_fine[0:Nib_fine]
+    p_p_fine = p_block_fine[Nib_fine:2*Nib_fine]
+    p_m_fine = p_block_fine[2*Nib_fine:3*Nib_fine]
 
     rhs_1_coarse = rhs_coarse[:sz_coarse]
     rhs_2_coarse = rhs_coarse[sz_coarse:2*sz_coarse]
