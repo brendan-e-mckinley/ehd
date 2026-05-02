@@ -325,9 +325,10 @@ def spreadQ_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, q, delta_r, cut, dx, dy
 
         mask = (Rk <= cut)
 
+        Rk_safe = np.where(Rk > 0, Rk, 1.0)
         n_dot_rhat = np.where(
             mask,
-            (n_x[k] * (X_local - xk) + n_y[k] * (Y_local - yk) + n_z[k] * (Z_local - zk)) / Rk,
+            (n_x[k] * (X_local - xk) + n_y[k] * (Y_local - yk) + n_z[k] * (Z_local - zk)) / Rk_safe,
             0.0
         )
 
@@ -1343,6 +1344,26 @@ def Build_RHS_Schur_System_Manufactured_Solution(ctxt_true, ctxt_BCs, x, y, xib,
 
     return b_Ctx
 
+def Build_RHS_Schur_System_Manufactured_Solution_3d(ctxt_true, x, y, z, xib, yib, zib, Nx, Ny, Nz, Nib, delta_layer):
+    b_Ctx = np.zeros_like(ctxt_true)
+    sz = Nx * Ny * Nz
+    q_i = 3 * sz
+    dl2 = delta_layer**2
+    # N_p_BC = ctxt_BCs[sz:2*sz]
+    # N_m_BC = ctxt_BCs[2*sz:3*sz]
+    
+    r = np.sqrt(x**2 + y**2 + z**2)
+    rib = np.sqrt(xib**2 + yib**2 + zib**2)
+
+    b_Ctx[:sz] = (dl2 * (2 * np.cos(r) / r - np.sin(r)) + 0.5 * (np.exp(-np.sin(r)) - np.exp(np.sin(r)))).ravel(order='F')
+    b_Ctx[sz:2*sz] = -(np.exp(-np.sin(r)) * (-(np.cos(r))**2 + 2 * np.cos(r) / r - np.sin(r))).ravel(order='F') #- N_p_BC
+    b_Ctx[2*sz:3*sz] =  (np.exp(np.sin(r)) * ((np.cos(r))**2 + 2 * np.cos(r) / r - np.sin(r))).ravel(order='F') #- N_m_BC
+    b_Ctx[q_i:q_i+Nib] = (delta_layer * np.cos(rib)).ravel(order='F')
+    b_Ctx[q_i+Nib:q_i+2*Nib] = (-np.cos(rib) * np.exp(-np.sin(rib))).ravel(order='F')
+    b_Ctx[q_i+2*Nib:q_i+3*Nib] = (np.cos(rib) * np.exp(np.sin(rib))).ravel(order='F')
+
+    return b_Ctx
+
 class ConstrainedLapOperator:
     def __init__(self, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
         self.dLap = dLap
@@ -1371,6 +1392,22 @@ def SchurLinearOperator_R(dLap, shape, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_
 
         res_1, res_2, res_3 = apply_Schur_R(dLap, [p, p_p, p_m], delta_layer, Nx, Ny, Sop_prime, Jop_prime)
         return np.concatenate([res_1, res_2, res_3])
+    return LinearOperator((n, n), matvec=mv)
+
+# LinearOperator object for using the Schur complement as our LHS matrix in GMRES (double grid)
+def SchurLinearOperator_R_3d_double_grid(shape, ctxt_BCs, Nib, Nib_fine, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz_coarse):
+    n = shape
+    def mv(p_block):
+        coarse_index = 3 * Nib
+        p_coarse = p_block[0:Nib]
+        p_p_coarse = p_block[Nib:2*Nib]
+        p_m_coarse = p_block[2*Nib:3*Nib]
+        p_fine = p_block[coarse_index:coarse_index+Nib_fine]
+        p_p_fine = p_block[coarse_index+Nib_fine:coarse_index+2*Nib_fine]
+        p_m_fine = p_block[coarse_index+2*Nib_fine:]
+
+        [res_1_coarse, res_2_coarse, res_3_coarse], [res_1_fine, res_2_fine, res_3_fine] = apply_Schur_R_3d_double_grid([p_coarse, p_p_coarse, p_m_coarse], [p_fine, p_p_fine, p_m_fine], ctxt_BCs, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, sz_coarse)
+        return np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse, res_1_fine, res_2_fine, res_3_fine])
     return LinearOperator((n, n), matvec=mv)
 
 # LinearOperator object for using the Schur complement as our LHS matrix in GMRES

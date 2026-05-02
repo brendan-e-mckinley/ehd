@@ -1,0 +1,54 @@
+ 0: amrex::BLBackTrace::print_backtrace_info(__sFILE*) (in amrex_poisson_3d.cpython-313-darwin.so) + 54
+
+ 1: amrex::BLBackTrace::handler(int) (in amrex_poisson_3d.cpython-313-darwin.so) + 660
+
+ 2: _sigtramp (in libsystem_platform.dylib) + 29
+
+ 4: 0x000000013ad17ac8 (in amrex_poisson_3d.cpython-313-darwin.so) + 392
+
+ 5: 0x000000013add90cf (in amrex_poisson_3d.cpython-313-darwin.so) + 367
+
+ 6: amrex::MLCellLinOpT<amrex::MultiFab>::applyBC(int, int, amrex::MultiFab&, amrex::LinOpEnumType::BCMode, amrex::LinOpEnumType::StateMode, amrex::MLMGBndryT<amrex::MultiFab> const*, bool) const (in amrex_poisson_3d.cpython-313-darwin.so) + 372
+
+ 7: amrex::MLCellLinOpT<amrex::MultiFab>::apply(int, int, amrex::MultiFab&, amrex::MultiFab&, amrex::LinOpEnumType::BCMode, amrex::LinOpEnumType::StateMode, amrex::MLMGBndryT<amrex::MultiFab> const*) const (in amrex_poisson_3d.cpython-313-darwin.so) + 56
+
+ 8: amrex::MLCellLinOpT<amrex::MultiFab>::solutionResidual(int, amrex::MultiFab&, amrex::MultiFab&, amrex::MultiFab const&, amrex::MultiFab const*) (in amrex_poisson_3d.cpython-313-darwin.so) + 104
+
+ 9: 0x000000013ad61ceb (in amrex_poisson_3d.cpython-313-darwin.so) + 1563
+
+10: 0x000000013ae14023 (in amrex_poisson_3d.cpython-313-darwin.so) + 179
+
+11: 0x000000013ae212d3 (in amrex_poisson_3d.cpython-313-darwin.so) + 16355
+
+12: 0x000000013ae29a02 (in amrex_poisson_3d.cpython-313-darwin.so) + 114
+
+13: 0x000000013ae2979b (in amrex_poisson_3d.cpython-313-darwin.so) + 1163
+
+14: 0x000000013ae03e14 (in amrex_poisson_3d.cpython-313-darwin.so) + 5124
+
+15: cfunction_call (in python3.13) + 66
+
+16: _PyEval_EvalFrameDefault (in python3.13) + 99221
+
+17: PyEval_EvalCode (in python3.13) + 158
+
+18: run_eval_code_obj (in python3.13) + 86
+
+19: run_mod (in python3.13) + 146
+
+20: pyrun_file (in python3.13) + 122
+
+21: _PyRun_SimpleFileObject (in python3.13) + 280
+
+22: _PyRun_AnyFileObject (in python3.13) + 66
+
+23: pymain_run_file_obj (in python3.13) + 208
+
+24: pymain_run_file (in python3.13) + 89
+
+25: Py_RunMain (in python3.13) + 1546
+
+26: pymain_main (in python3.13) + 421
+
+27: main (in python3.13) + 57
+
