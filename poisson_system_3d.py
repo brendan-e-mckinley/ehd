@@ -386,6 +386,36 @@ ctxt_BCs = np.concatenate([
 # Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
 # Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
+# ####################
+# ## EXACT SOLUTION ##
+# ####################
+# r_coarse = np.sqrt(X**2 + Y**2 + Z**2)
+# r_fine = np.sqrt(Xf**2 + Yf**2 + Zf**2)
+# phi_true_coarse = np.sin(r_coarse)
+# n_p_true_coarse = np.exp(-np.sin(r_coarse))
+# n_m_true_coarse = np.exp(np.sin(r_coarse))
+# phi_true_fine = np.sin(r_fine)
+# n_p_true_fine = np.exp(-np.sin(r_fine))
+# n_m_true_fine = np.exp(np.sin(r_fine))
+
+# ctxt_true_coarse = np.concatenate([
+#     phi_true_coarse.ravel(order='F'),
+#     n_p_true_coarse.ravel(order='F'),
+#     n_m_true_coarse.ravel(order='F'),
+#     np.full_like(xib_coarse, np.nan),
+#     np.full_like(xib_coarse, np.nan),
+#     np.full_like(xib_coarse, np.nan)
+# ])
+
+# ctxt_true_fine = np.concatenate([
+#     phi_true_fine.ravel(order='F'),
+#     n_p_true_fine.ravel(order='F'),
+#     n_m_true_fine.ravel(order='F'),
+#     np.full_like(xib_fine, np.nan),
+#     np.full_like(xib_fine, np.nan),
+#     np.full_like(xib_fine, np.nan)
+# ])
+
 ctxt_coarse = np.concatenate([
     Phi_guess.ravel(order='F'),
     N_pm_guess.ravel(order='F'),
@@ -435,30 +465,39 @@ def delta_a(r, a):
     return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
 
 @jit(nopython=True)
-def delta(r):
+def delta_coarse(r):
     return delta_a(r, 1.2*dx)
 
 @jit(nopython=True)
-def delta_r(r):
+def delta_r_coarse(r):
     return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
 
+# Fine delta functions (using dx_fine)
+@jit(nopython=True)
+def delta_fine(r):
+    return delta_a(r, 1.2*dx_fine)
+
+@jit(nopython=True)
+def delta_r_fine(r):
+    return (1/(1.2*dx_fine))**2 * r * delta_a(r, 1.2*dx_fine)
+
 def Sop_prime(q):
-    return cpeo.spreadQ_prime_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, n_x_coarse, n_y_coarse, n_z_coarse, q, delta_r, cut, dx, dy, dz)
+    return cpeo.spreadQ_prime_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, n_x_coarse, n_y_coarse, n_z_coarse, q, delta_r_coarse, cut, dx, dy, dz)
 
 def Sop_prime_fine(q):
-    return cpeo.spreadQ_prime_3d(Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, n_x_fine, n_y_fine, n_z_fine, q, delta_r, cut, dx_fine, dy_fine, dz_fine)
+    return cpeo.spreadQ_prime_3d(Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, n_x_fine, n_y_fine, n_z_fine, q, delta_r_fine, cut, dx_fine, dy_fine, dz_fine)
 
 def Jop(P):
-    return cpeo.interpPhi_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, P, delta, cut, dx, dy, dz)
+    return cpeo.interpPhi_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, P, delta_coarse, cut, dx, dy, dz)
 
 def Jop_fine(P):
-    return cpeo.interpPhi_3d(Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, P, delta, cut, dx_fine, dy_fine, dz_fine)
+    return cpeo.interpPhi_3d(Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, P, delta_fine, cut, dx_fine, dy_fine, dz_fine)
 
 def Jop_prime(P):
-    return cpeo.interpPhi_prime_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, n_x_coarse, n_y_coarse, n_z_coarse, P, delta_r, cut, dx, dy, dz)
+    return cpeo.interpPhi_prime_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, n_x_coarse, n_y_coarse, n_z_coarse, P, delta_r_coarse, cut, dx, dy, dz)
 
 def Jop_prime_fine(P):
-    return cpeo.interpPhi_prime_3d(Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, n_x_fine, n_y_fine, n_z_fine, P, delta_r, cut, dx_fine, dy_fine, dz_fine)
+    return cpeo.interpPhi_prime_3d(Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, n_x_fine, n_y_fine, n_z_fine, P, delta_r_fine, cut, dx_fine, dy_fine, dz_fine)
 
 def G_d_G_3d(Phi, N_pm):
     return cpeo.Grad_dot_Grad_3d(Phi, N_pm, dx, dy, dz, Nx, Ny, Nz)
@@ -478,6 +517,12 @@ def b_Op_Schur_3d_double_grid(ctxt_coarse, ctxt_fine):
 
 def b_Op_Schur_3d(ctxt):
     return cpeo.Build_RHS_Schur_System_3d(ctxt, ctxt_BCs_Schur, G_d_G_3d, delta_layer, Nx, Ny, Nz, Nib_coarse, Jop, Jop_prime, Sop_prime, dx, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
+
+# def b_Op_MMS_coarse():
+#     return cpeo.Build_RHS_Schur_System_Manufactured_Solution_3d(ctxt_true_coarse, X, Y, Z, xib_coarse, yib_coarse, zib_coarse, Nx, Ny, Nz, Nib_coarse, delta_layer)
+
+# def b_Op_MMS_fine():
+#     return cpeo.Build_RHS_Schur_System_Manufactured_Solution_3d(ctxt_true_fine, Xf, Yf, Zf, xib_fine, yib_fine, zib_fine, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_fine, delta_layer)
 
 def AxOp_3d(ctxt):
     return cpeo.Constrained_Lap_3d(ctxt, ctxt_BCs, delta_layer, Nx, Ny, Nz, Nib_coarse, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Sop_prime, Jop_prime)
@@ -676,8 +721,18 @@ schurRHS_coarse, schurRHS_fine = b_Op_Schur_3d_double_grid(ctxt_coarse, ctxt_fin
 # DU = np.full((len(schurRHS_full), m), np.nan)
 # DG = np.full((len(schurRHS_full), m), np.nan)
 
+# # some fuckery here
+# mask_coarse = np.ones(X.shape, dtype=bool) # Create mask of True
+# mask_coarse[int(0.25*Nx):int(0.75*Nx), int(0.25*Ny):int(0.75*Ny), int(0.25*Nz):int(0.75*Nz)] = False 
+
+# masked_setup_coarse = X[mask_coarse]
+# masked_setup_coarse = masked_setup_coarse.ravel(order='F')
+# masked_setup_coarse_x3 = np.concatenate([masked_setup_coarse, masked_setup_coarse, masked_setup_coarse])
+
 DU_coarse = np.full((len(schurRHS_coarse), m), np.nan)
 DG_coarse = np.full((len(schurRHS_coarse), m), np.nan)
+# DU_coarse_masked = np.full((len(masked_setup_coarse_x3), m), np.nan)
+# DG_coarse_masked = np.full((len(masked_setup_coarse_x3), m), np.nan)
 
 DU_fine = np.full((len(schurRHS_fine), m), np.nan)
 DG_fine = np.full((len(schurRHS_fine), m), np.nan)
@@ -687,35 +742,22 @@ u_n_fine = ctxt_fine.copy()
 # u_n = np.concatenate([u_n_coarse, u_n_fine])
 
 # Build dense Schur matrix
-# schurOp = cpeo.SchurLinearOperator_R_3d(shape, Nib, delta_layer, Sop_prime, Jop_prime, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi)
 computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(schurRHS_coarse, schurRHS_fine, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
-schurDense_coarse = np.zeros((Nib_coarse * 3, Nib_coarse * 3))
-schurDense_fine = np.zeros((Nib_fine * 3, Nib_fine * 3))
-for col in range(Nib_coarse * 3): 
-    eye_mat = np.zeros(Nib_coarse * 3)
+schurDense = np.zeros((Nib_coarse * 3 + Nib_fine * 3, Nib_coarse * 3 + Nib_fine * 3))
+for col in range(Nib_coarse * 3 + Nib_fine * 3):
+    eye_mat = np.zeros(Nib_coarse * 3 + Nib_fine * 3)
     eye_mat[col] = 1
-    p = eye_mat[0:Nib_coarse]
-    p_p = eye_mat[Nib_coarse:2*Nib_coarse]
-    p_m = eye_mat[2*Nib_coarse:3*Nib_coarse]
-    [res_1_coarse, res_2_coarse, res_3_coarse], _ = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
-    schurDense_coarse[:,col] = np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse])
-
-for col in range(Nib_fine * 3): 
-    eye_mat = np.zeros(Nib_fine * 3)
-    eye_mat[col] = 1
-    p = eye_mat[0:Nib_fine]
-    p_p = eye_mat[Nib_fine:2*Nib_fine]
-    p_m = eye_mat[2*Nib_fine:3*Nib_fine]
-    _, [res_1_fine, res_2_fine, res_3_fine] = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
-    schurDense_fine[:,col] = np.concatenate([res_1_fine, res_2_fine, res_3_fine])
+    p, p_p, p_m, p_fine, p_p_fine, p_m_fine = eye_mat[:Nib_coarse], eye_mat[Nib_coarse:2*Nib_coarse], eye_mat[2*Nib_coarse:3*Nib_coarse], eye_mat[3*Nib_coarse:3*Nib_coarse + Nib_fine], eye_mat[3*Nib_coarse + Nib_fine:3*Nib_coarse + 2 * Nib_fine], eye_mat[3*Nib_coarse + 2 * Nib_fine:]
+    [r1, r2, r3], [rf1, rf2, rf3] = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p_fine, p_p_fine, p_m_fine], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
+    schurDense[:, col] = np.concatenate([r1, r2, r3, rf1, rf2, rf3])
 
 # Compute SVD once
-U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse = np.linalg.svd(schurDense_coarse)
-U_schur_fine, Sigma_schur_fine, Vh_schur_fine = np.linalg.svd(schurDense_fine)
+U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
 
 # Use SVD solve to initialize 
-p_next_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
-p_next_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
+p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, np.concatenate([computedRHS_coarse, computedRHS_fine]))
+p_next_coarse = p_next[:3*Nib_coarse]
+p_next_fine = p_next[3*Nib_coarse:]
 G_u_n_coarse, G_u_n_fine = cpeo.post_processing_compute_R_3d_double_grid(p_next_coarse, p_next_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
 # G_u_n = np.concatenate([G_u_n_coarse, G_u_n_fine])
 
@@ -830,8 +872,9 @@ schurRHS_coarse, schurRHS_fine = b_Op_Schur_3d_double_grid(ctxt_coarse, ctxt_fin
 computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(schurRHS_coarse, schurRHS_fine, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
 
 # Use SVD to solve
-p_next_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
-p_next_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
+p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, np.concatenate([computedRHS_coarse, computedRHS_fine]))
+p_next_coarse = p_next[:3*Nib_coarse]
+p_next_fine = p_next[3*Nib_coarse:]
 G_u_n_coarse, G_u_n_fine = cpeo.post_processing_compute_R_3d_double_grid(p_next_coarse, p_next_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
 
 u_next_coarse = G_u_n_coarse.copy()
@@ -880,24 +923,76 @@ Nm_fine = u_next_fine[2*index_fine:3*index_fine].reshape((nz_fine_patch, ny_fine
 # # mesh.set_opacity(opacity)
 # plotter.show(title='Nm_solved')
 
+# Phi_n_coarse_to_mask = u_n_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+# Np_n_coarse_to_mask = u_n_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+# Nm_n_coarse_to_mask = u_n_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+# Phi_n_coarse_masked = Phi_n_coarse_to_mask[mask_coarse]
+# Np_n_coarse_masked = Np_n_coarse_to_mask[mask_coarse]
+# Nm_n_coarse_masked = Nm_n_coarse_to_mask[mask_coarse]
+# u_n_coarse_masked = np.concatenate([Phi_n_coarse_masked, Np_n_coarse_masked, Nm_n_coarse_masked])
+
+# Phi_G_n_coarse_to_mask = G_u_n_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+# Np_G__n_coarse_to_mask = G_u_n_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+# Nm_G_n_coarse_to_mask = G_u_n_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+# Phi_G_n_coarse_masked = Phi_G_n_coarse_to_mask[mask_coarse]
+# Np_G_n_coarse_masked = Np_G__n_coarse_to_mask[mask_coarse]
+# Nm_G_n_coarse_masked = Nm_G_n_coarse_to_mask[mask_coarse]
+# G_u_n_coarse_masked = np.concatenate([Phi_G_n_coarse_masked, Np_G_n_coarse_masked, Nm_G_n_coarse_masked])
+
 # Anderson acceleration loop
 for inner_its in range(100000):
     schurRHS_coarse, schurRHS_fine = b_Op_Schur_3d_double_grid(u_next_coarse, u_next_fine)
     computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(schurRHS_coarse, schurRHS_fine, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
 
     # Use SVD to solve
-    p_n_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
-    p_n_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
+    p_n = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, np.concatenate([computedRHS_coarse, computedRHS_fine]))
+    p_n_coarse = p_next[:3*Nib_coarse]
+    p_n_fine = p_next[3*Nib_coarse:]
     G_u_next_coarse, G_u_next_fine = cpeo.post_processing_compute_R_3d_double_grid(p_n_coarse, p_n_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
 
     # G_u_next = np.concatenate([G_u_n_coarse, G_u_n_fine])
 
     m_n = min(m, inner_its + 1)
+
+    # # mask
+    # Phi_next_coarse_to_mask = u_next_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Np_next_coarse_to_mask = u_next_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Nm_next_coarse_to_mask = u_next_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Phi_next_coarse_masked = Phi_next_coarse_to_mask[mask_coarse]
+    # Np_next_coarse_masked = Np_next_coarse_to_mask[mask_coarse]
+    # Nm_next_coarse_masked = Nm_next_coarse_to_mask[mask_coarse]
+    # u_next_coarse_masked = np.concatenate([Phi_next_coarse_masked, Np_next_coarse_masked, Nm_next_coarse_masked])
+
+    # Phi_n_coarse_to_mask = u_n_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Np_n_coarse_to_mask = u_n_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Nm_n_coarse_to_mask = u_n_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Phi_n_coarse_masked = Phi_n_coarse_to_mask[mask_coarse]
+    # Np_n_coarse_masked = Np_n_coarse_to_mask[mask_coarse]
+    # Nm_n_coarse_masked = Nm_n_coarse_to_mask[mask_coarse]
+    # u_n_coarse_masked = np.concatenate([Phi_n_coarse_masked, Np_n_coarse_masked, Nm_n_coarse_masked])
+
+    # Phi_G_next_coarse_to_mask = G_u_next_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Np_G_next_coarse_to_mask = G_u_next_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Nm_G_next_coarse_to_mask = G_u_next_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Phi_G_next_coarse_masked = Phi_G_next_coarse_to_mask[mask_coarse]
+    # Np_G_next_coarse_masked = Np_G_next_coarse_to_mask[mask_coarse]
+    # Nm_G_next_coarse_masked = Nm_G_next_coarse_to_mask[mask_coarse]
+    # G_u_next_coarse_masked = np.concatenate([Phi_G_next_coarse_masked, Np_G_next_coarse_masked, Nm_G_next_coarse_masked])
+
+    # Phi_G_n_coarse_to_mask = G_u_n_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Np_G__n_coarse_to_mask = G_u_n_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Nm_G_n_coarse_to_mask = G_u_n_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Phi_G_n_coarse_masked = Phi_G_n_coarse_to_mask[mask_coarse]
+    # Np_G_n_coarse_masked = Np_G__n_coarse_to_mask[mask_coarse]
+    # Nm_G_n_coarse_masked = Nm_G_n_coarse_to_mask[mask_coarse]
+    # G_u_n_coarse_masked = np.concatenate([Phi_G_n_coarse_masked, Np_G_n_coarse_masked, Nm_G_n_coarse_masked])
     
     # Store differences
     if inner_its < m:
         DU_coarse[:, inner_its] = u_next_coarse - u_n_coarse
         DG_coarse[:, inner_its] = G_u_next_coarse - G_u_n_coarse
+        # DU_coarse_masked[:, inner_its] = u_next_coarse_masked - u_next_coarse_masked
+        # DG_coarse_masked[:, inner_its] = G_u_next_coarse_masked - G_u_n_coarse_masked
         DU_fine[:, inner_its] = u_next_fine - u_n_fine
         DG_fine[:, inner_its] = G_u_next_fine - G_u_n_fine
     else:
@@ -907,14 +1002,20 @@ for inner_its in range(100000):
         DG_fine = np.roll(DG_fine, -1, axis=1)
         DU_coarse[:, -1] = u_next_coarse - u_n_coarse
         DG_coarse[:, -1] = G_u_next_coarse - G_u_n_coarse
+        # DU_coarse_masked[:, -1] = u_next_coarse_masked - u_n_coarse_masked
+        # DG_coarse_masked[:, -1] = G_u_next_coarse_masked - G_u_n_coarse_masked
         DU_fine[:, -1] = u_next_fine - u_n_fine
         DG_fine[:, -1] = G_u_next_fine - G_u_n_fine
     
     f_n_coarse = G_u_next_coarse - u_next_coarse
+    # f_n_coarse_masked = G_u_next_coarse_masked - u_next_coarse_masked
     f_n_fine = G_u_next_fine - u_next_fine
     DF_coarse = DG_coarse[:, :m_n] - DU_coarse[:, :m_n]
+    # DF_coarse_masked = DG_coarse_masked[:, :m_n] - DU_coarse_masked[:, :m_n]
     DF_fine = DG_fine[:, :m_n] - DU_fine[:, :m_n]
 
+    # f_n = np.concatenate([f_n_coarse_masked, f_n_fine])
+    # DF = np.concatenate([DF_coarse_masked, DF_fine], axis=0)
     f_n = np.concatenate([f_n_coarse, f_n_fine])
     DF = np.concatenate([DF_coarse, DF_fine], axis=0)
     gamma, _, _, _ = lstsq(DF, f_n)
@@ -924,8 +1025,10 @@ for inner_its in range(100000):
     # gamma_fine, residuals, rank, s = lstsq(DF_fine, f_n_fine)
     
     u_n_coarse = u_next_coarse.copy()
+    # u_n_coarse_masked = u_next_coarse_masked.copy()
     u_n_fine = u_next_fine.copy()
     G_u_n_coarse = G_u_next_coarse.copy()
+    # G_u_n_coarse_masked = G_u_next_coarse_masked.copy()
     G_u_n_fine = G_u_next_fine.copy()
     
     u_next_coarse = (G_u_next_coarse - DG_coarse[:, :m_n] @ gamma) - (1-beta) * (f_n_coarse - DF_coarse @ gamma)
@@ -959,6 +1062,25 @@ for inner_its in range(100000):
     
     schur_next_coarse = np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse])
     schur_next_fine = np.concatenate([res_1_fine, res_2_fine, res_3_fine])
+
+    # Phi_LHS_coarse_to_mask = schur_next_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Np_LHS_coarse_to_mask = schur_next_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Nm_LHS_coarse_to_mask = schur_next_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Phi_LHS_coarse_masked = Phi_LHS_coarse_to_mask[mask_coarse]
+    # Np_LHS_coarse_masked = Np_LHS_coarse_to_mask[mask_coarse]
+    # Nm_LHS_coarse_masked = Nm_LHS_coarse_to_mask[mask_coarse]
+    # LHS_coarse_masked = np.concatenate([Phi_LHS_coarse_masked, Np_LHS_coarse_masked, Nm_LHS_coarse_masked])
+
+    # Phi_RHS_coarse_to_mask = computedRHS_coarse[:index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Np_RHS_coarse_to_mask = computedRHS_coarse[index_coarse:2*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Nm_RHS_coarse_to_mask = computedRHS_coarse[2*index_coarse:3*index_coarse].reshape((Nz, Ny, Nx), order='F')
+    # Phi_RHS_coarse_masked = Phi_RHS_coarse_to_mask[mask_coarse]
+    # Np_RHS_coarse_masked = Np_RHS_coarse_to_mask[mask_coarse]
+    # Nm_RHS_coarse_masked = Nm_RHS_coarse_to_mask[mask_coarse]
+    # RHS_coarse_masked = np.concatenate([Phi_RHS_coarse_masked, Np_RHS_coarse_masked, Nm_RHS_coarse_masked])
+
+    # err_curr_coarse = np.linalg.norm(LHS_coarse_masked - RHS_coarse_masked) / np.linalg.norm(RHS_coarse_masked)
+    
     err_curr_coarse = np.linalg.norm(schur_next_coarse - computedRHS_coarse) / np.linalg.norm(computedRHS_coarse)
     err_curr_fine = np.linalg.norm(schur_next_fine - computedRHS_fine) / np.linalg.norm(computedRHS_fine)
     
