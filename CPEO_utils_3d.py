@@ -301,8 +301,8 @@ def spreadQ_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, q, delta_r, cut, dx, dy
     # dx = X[0, 1, 0] - X[0, 0, 0]
     # dy = Y[1, 0, 0] - Y[0, 0, 0]
     # dz = Z[0, 0, 1] - Z[0, 0, 0]
-    Nx = X.shape[1]
-    Ny = X.shape[0]
+    Nx = X.shape[0]
+    Ny = X.shape[1]
     Nz = X.shape[2]
 
     for k in range(Nq):
@@ -317,9 +317,9 @@ def spreadQ_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, q, delta_r, cut, dx, dy
         k_min = max(int((zk - cut - Z[0, 0, 0]) / dz), 0)
         k_max = min(int((zk + cut - Z[0, 0, 0]) / dz) + 1, Nz)
 
-        X_local = X[j_min:j_max, i_min:i_max, k_min:k_max]
-        Y_local = Y[j_min:j_max, i_min:i_max, k_min:k_max]
-        Z_local = Z[j_min:j_max, i_min:i_max, k_min:k_max]
+        X_local = X[i_min:i_max, j_min:j_max, k_min:k_max]
+        Y_local = Y[i_min:i_max, j_min:j_max, k_min:k_max]
+        Z_local = Z[i_min:i_max, j_min:j_max, k_min:k_max]
 
         Rk = np.sqrt((X_local - xk)**2 + (Y_local - yk)**2 + (Z_local - zk)**2)
 
@@ -332,8 +332,8 @@ def spreadQ_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, q, delta_r, cut, dx, dy
             0.0
         )
 
-        contribution = q[k] * n_dot_rhat * delta_r(Rk) * mask
-        Sq[j_min:j_max, i_min:i_max, k_min:k_max] += contribution
+        contribution = -q[k] * n_dot_rhat * delta_r(Rk) * mask
+        Sq[i_min:i_max, j_min:j_max, k_min:k_max] += contribution
 
     return Sq
 
@@ -377,26 +377,21 @@ def interpPhi_prime(X, Y, xq, yq, n_x, n_y, Phi, delta_r, cut):
 # @jit(nopython=True)
 def interpPhi_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, Phi, delta_r, cut, dx_loc, dy_loc, dz_loc):
     Jphi = np.zeros_like(xq)
-    # dx_loc = X[0, 1, 0] - X[0, 0, 0]
-    # dy_loc = Y[1, 0, 0] - Y[0, 0, 0]
-    # dz_loc = Z[0, 0, 1] - Z[0, 0, 0]
-    Ny, Nx, Nz = X.shape
-
+    Nx, Ny, Nz = X.shape  # FIXED: ij indexing means shape = (Nx, Ny, Nz)
     for k in range(len(xq)):
         xk, yk, zk = xq[k], yq[k], zq[k]
         nxk, nyk, nzk = n_x[k], n_y[k], n_z[k]
-
+        # x varies along axis 0, y along axis 1, z along axis 2
         i_min = max(int((xk - cut - X[0, 0, 0]) / dx_loc), 0)
         i_max = min(int((xk + cut - X[0, 0, 0]) / dx_loc) + 1, Nx)
         j_min = max(int((yk - cut - Y[0, 0, 0]) / dy_loc), 0)
         j_max = min(int((yk + cut - Y[0, 0, 0]) / dy_loc) + 1, Ny)
         k_min = max(int((zk - cut - Z[0, 0, 0]) / dz_loc), 0)
         k_max = min(int((zk + cut - Z[0, 0, 0]) / dz_loc) + 1, Nz)
-
-        X_local = X[j_min:j_max, i_min:i_max, k_min:k_max]
-        Y_local = Y[j_min:j_max, i_min:i_max, k_min:k_max]
-        Z_local = Z[j_min:j_max, i_min:i_max, k_min:k_max]
-        Phi_local = Phi[j_min:j_max, i_min:i_max, k_min:k_max]
+        X_local = X[i_min:i_max, j_min:j_max, k_min:k_max]  # FIXED: i indexes x-axis
+        Y_local = Y[i_min:i_max, j_min:j_max, k_min:k_max]
+        Z_local = Z[i_min:i_max, j_min:j_max, k_min:k_max]
+        Phi_local = Phi[i_min:i_max, j_min:j_max, k_min:k_max]
 
         dx = X_local - xk
         dy = Y_local - yk
@@ -409,7 +404,7 @@ def interpPhi_prime_3d(X, Y, Z, xq, yq, zq, n_x, n_y, n_z, Phi, delta_r, cut, dx
         n_dot_rhat = np.where(mask, (nxk * dx + nyk * dy + nzk * dz) / R_safe, 0.0)
 
         delta_vals = delta_r(R)
-        contribution = Phi_local * n_dot_rhat * delta_vals * mask
+        contribution = -Phi_local * n_dot_rhat * delta_vals * mask
         Jphi[k] = dx_loc * dy_loc * dz_loc * np.sum(contribution)
 
     return Jphi
@@ -484,8 +479,8 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
 @jit(nopython=True)
 def interpPhi_3d(X, Y, Z, xq, yq, zq, Phi, delta, cut, dx_loc, dy_loc, dz_loc):
     Jphi = np.zeros_like(xq)
-    Nx = X.shape[1]
-    Ny = X.shape[0]
+    Nx = X.shape[0]
+    Ny = X.shape[1]
     Nz = X.shape[2]
     # dx_loc = X[0, 1, 0] - X[0, 0, 0]
     # dy_loc = Y[1, 0, 0] - Y[0, 0, 0]
@@ -501,10 +496,10 @@ def interpPhi_3d(X, Y, Z, xq, yq, zq, Phi, delta, cut, dx_loc, dy_loc, dz_loc):
         k_min = max(int((zk - cut - Z[0, 0, 0]) / dz_loc), 0)
         k_max = min(int((zk + cut - Z[0, 0, 0]) / dz_loc) + 1, Nz)
 
-        X_local = X[j_min:j_max, i_min:i_max, k_min:k_max]
-        Y_local = Y[j_min:j_max, i_min:i_max, k_min:k_max]
-        Z_local = Z[j_min:j_max, i_min:i_max, k_min:k_max]
-        Phi_local = Phi[j_min:j_max, i_min:i_max, k_min:k_max]
+        X_local = X[i_min:i_max, j_min:j_max, k_min:k_max]
+        Y_local = Y[i_min:i_max, j_min:j_max, k_min:k_max]
+        Z_local = Z[i_min:i_max, j_min:j_max, k_min:k_max]
+        Phi_local = Phi[i_min:i_max, j_min:j_max, k_min:k_max]
 
         dx = X_local - xk
         dy = Y_local - yk
