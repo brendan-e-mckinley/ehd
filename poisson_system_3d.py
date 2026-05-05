@@ -488,25 +488,25 @@ Nm_fine = ctxt_fine[2*index_fine:3*index_fine].reshape((nz_fine_patch, ny_fine_p
 ###############################
 
 @jit(nopython=True)
-def delta_a(r, a):
-    return (1/(2*np.pi*a**2)) * np.exp(-0.5*(r/a)**2)
+def delta_a_3d(r, a):
+    return (1/(2*np.pi*a**2)**(1.5)) * np.exp(-0.5*(r/a)**2)
 
 @jit(nopython=True)
 def delta_coarse(r):
-    return delta_a(r, 1.2*dx)
+    return delta_a_3d(r, 1.2*dx)
 
 @jit(nopython=True)
 def delta_r_coarse(r):
-    return (1/(1.2*dx))**2 * r * delta_a(r, 1.2*dx)
+    # True d(delta_a)/dr = -(r/a^2) * delta_a  -- strictly negative
+    return -(1/(1.2*dx)**2) * r * delta_a_3d(r, 1.2*dx)
 
-# Fine delta functions (using dx_fine)
 @jit(nopython=True)
 def delta_fine(r):
-    return delta_a(r, 1.2*dx_fine)
+    return delta_a_3d(r, 1.2*dx_fine)
 
 @jit(nopython=True)
 def delta_r_fine(r):
-    return (1/(1.2*dx_fine))**2 * r * delta_a(r, 1.2*dx_fine)
+    return -(1/(1.2*dx)**2) * r * delta_a_3d(r, 1.2*dx_fine) #dx_fine
 
 def Sop_prime(q):
     return cpeo.spreadQ_prime_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, n_x_coarse, n_y_coarse, n_z_coarse, q, delta_r_coarse, cut_coarse, dx, dy, dz)
