@@ -66,7 +66,7 @@ beta_BC = 7.94
 sigma_bc = 0.78  # 0.68
 delta_layer = 5*dx  # 0.1 # 5*dx; %6*dx;
 cut_coarse = 6 * 1.2 * dx # cutoff value
-cut_fine = 6 * 1.2 * dx
+cut_fine = 6 * 1.2 * dx_fine
 
 # Anderson acceleration parameters
 beta = 0.2
@@ -138,7 +138,7 @@ plt.show()
 
 # Choose number of subdivisions so point spacing matches dx
 # Edge length of icosphere ~ rad * 1.0 / nu (approximate)
-nu_fine = max(1, int(rad / (dx))) #dx_fine 
+nu_fine = max(1, int(rad / (dx_fine))) #dx_fine 
 vertices_fine, faces_fine = icosphere.icosphere(nu_fine)
 
 # vertices are already on the unit sphere, scale to radius
@@ -505,11 +505,11 @@ def delta_r_coarse(r):
 
 @jit(nopython=True)
 def delta_fine(r):
-    return delta_a_3d(r, 1.2*dx) #dx_fine
+    return delta_a_3d(r, 1.2*dx_fine) #dx_fine
 
 @jit(nopython=True)
 def delta_r_fine(r):
-    return -(1/(1.2*dx)**2) * r * delta_a_3d(r, 1.2*dx) #dx_fine
+    return -(1/(1.2*dx_fine)**2) * r * delta_a_3d(r, 1.2*dx_fine) #dx_fine
 
 def Sop_prime(q):
     return cpeo.spreadQ_prime_3d(X, Y, Z, xib_coarse, yib_coarse, zib_coarse, n_x_coarse, n_y_coarse, n_z_coarse, q, delta_r_coarse, cut_coarse, dx, dy, dz)
@@ -887,46 +887,33 @@ u_n_fine = ctxt_fine.copy()
 
 # Build dense Schur matrix
 computedRHS_coarse, computedRHS_fine = cpeo.schur_rhs_R_3d_double_grid(b_Op_MMS_coarse(), b_Op_MMS_fine(), Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Jop_prime, Jop_prime_fine)
-# zero_coarse = [np.zeros(Nib_coarse), np.zeros(Nib_coarse), np.zeros(Nib_coarse)]
-# zero_fine   = [np.zeros(Nib_fine),   np.zeros(Nib_fine),   np.zeros(Nib_fine)]
-# schurDense_coarse = np.zeros((Nib_coarse * 3, Nib_coarse * 3))
-# schurDense_fine = np.zeros((Nib_fine * 3, Nib_fine * 3))
-schurDense = np.zeros((Nib_coarse * 3 + Nib_fine * 3, Nib_coarse * 3 + Nib_fine * 3))
-for col in range(Nib_coarse * 3 + Nib_fine * 3):
-    eye_mat = np.zeros(Nib_coarse * 3 + Nib_fine * 3)
+schurDense_coarse = np.zeros((Nib_coarse * 3, Nib_coarse * 3))
+schurDense_fine = np.zeros((Nib_fine * 3, Nib_fine * 3))
+for col in range(Nib_coarse * 3): 
+    eye_mat = np.zeros(Nib_coarse * 3)
     eye_mat[col] = 1
-    p, p_p, p_m, p_fine, p_p_fine, p_m_fine = eye_mat[:Nib_coarse], eye_mat[Nib_coarse:2*Nib_coarse], eye_mat[2*Nib_coarse:3*Nib_coarse], eye_mat[3*Nib_coarse:3*Nib_coarse + Nib_fine], eye_mat[3*Nib_coarse + Nib_fine:3*Nib_coarse + 2 * Nib_fine], eye_mat[3*Nib_coarse + 2 * Nib_fine:]
-    [r1, r2, r3], [rf1, rf2, rf3] = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p_fine, p_p_fine, p_m_fine], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
-    schurDense[:, col] = np.concatenate([r1, r2, r3, rf1, rf2, rf3])
+    p = eye_mat[0:Nib_coarse]
+    p_p = eye_mat[Nib_coarse:2*Nib_coarse]
+    p_m = eye_mat[2*Nib_coarse:3*Nib_coarse]
+    [res_1_coarse, res_2_coarse, res_3_coarse], _ = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
+    schurDense_coarse[:,col] = np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse])
 
-# WORTH THINKING ABOUT THE CONSTRUCTION OF THIS DENSE MATRIX A LITTLE MORE DEEPLY
-# schurDense_coarse = np.zeros((Nib_coarse * 3, Nib_coarse * 3))
-# schurDense_fine = np.zeros((Nib_fine * 3, Nib_fine * 3))
-# for col in range(Nib_coarse * 3): 
-#     eye_mat = np.zeros(Nib_coarse * 3)
-#     eye_mat[col] = 1
-#     p = eye_mat[0:Nib_coarse]
-#     p_p = eye_mat[Nib_coarse:2*Nib_coarse]
-#     p_m = eye_mat[2*Nib_coarse:3*Nib_coarse]
-#     [res_1_coarse, res_2_coarse, res_3_coarse], _ = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
-#     schurDense_coarse[:,col] = np.concatenate([res_1_coarse, res_2_coarse, res_3_coarse])
-
-# for col in range(Nib_fine * 3): 
-#     eye_mat = np.zeros(Nib_fine * 3)
-#     eye_mat[col] = 1
-#     p = eye_mat[0:Nib_fine]
-#     p_p = eye_mat[Nib_fine:2*Nib_fine]
-#     p_m = eye_mat[2*Nib_fine:3*Nib_fine]
-#     _, [res_1_fine, res_2_fine, res_3_fine] = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
-#     schurDense_fine[:,col] = np.concatenate([res_1_fine, res_2_fine, res_3_fine])
+for col in range(Nib_fine * 3): 
+    eye_mat = np.zeros(Nib_fine * 3)
+    eye_mat[col] = 1
+    p = eye_mat[0:Nib_fine]
+    p_p = eye_mat[Nib_fine:2*Nib_fine]
+    p_m = eye_mat[2*Nib_fine:3*Nib_fine]
+    _, [res_1_fine, res_2_fine, res_3_fine] = cpeo.apply_Schur_R_3d_double_grid([p, p_p, p_m], [p, p_p, p_m], ctxt_BCs_Schur, delta_layer, Sop_prime, Sop_prime_fine, Jop_prime, Jop_prime_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, Nx, Ny, Nz, index_coarse)
+    schurDense_fine[:,col] = np.concatenate([res_1_fine, res_2_fine, res_3_fine])
 
 # Compute SVD once
-U_schur, Sigma_schur, Vh_schur = np.linalg.svd(schurDense)
+U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse = np.linalg.svd(schurDense_coarse)
+U_schur_fine, Sigma_schur_fine, Vh_schur_fine = np.linalg.svd(schurDense_fine)
 
 # Use SVD solve to initialize 
-p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, np.concatenate([computedRHS_coarse, computedRHS_fine]))
-p_next_coarse = p_next[:3*Nib_coarse]
-p_next_fine = p_next[3*Nib_coarse:]
+p_next_coarse = cpeo.solve_from_svd(U_schur_coarse, Sigma_schur_coarse, Vh_schur_coarse, computedRHS_coarse)
+p_next_fine = cpeo.solve_from_svd(U_schur_fine, Sigma_schur_fine, Vh_schur_fine, computedRHS_fine)
 check_coarse_processed, check_fine_processed = cpeo.post_processing_compute_R_3d_double_grid(p_next_coarse, p_next_fine, schurRHS_coarse, schurRHS_fine, ctxt_BCs_Schur, Nx, Ny, Nz, nx_fine_patch, ny_fine_patch, nz_fine_patch, Nib_coarse, Nib_fine, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, delta_layer, Sop_prime, Sop_prime_fine)
 
 phi_check_coarse = check_coarse_processed[:index_coarse]
