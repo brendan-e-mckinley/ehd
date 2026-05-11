@@ -8,6 +8,33 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import amrex_poisson_3d
 
+def apply_poisson_single_grid(x_in, bcs, x_lo, x_hi,
+                        y_lo, y_hi,
+                        z_lo, z_hi):
+    
+    # Initialize AMReX
+    amrex_poisson_3d.amrex_init([])
+
+    lap_x = []
+    
+    try:
+        # apply Laplacian operator
+        lap_x = amrex_poisson_3d.apply_poisson_single_grid(
+            x_in,
+            bcs,
+            x_lo=x_lo, x_hi=x_hi,
+            y_lo=y_lo, y_hi=y_hi,
+            z_lo=z_lo, z_hi=z_hi,
+            nghost=1,
+            fortran_order_x=False,
+            fortran_order_bc=False
+        )
+        
+    finally:
+        # Clean up AMReX
+        amrex_poisson_3d.amrex_finalize()
+        return lap_x
+
 def apply_poisson(x_in_coarse, x_in_fine, bcs, x_lo, x_hi,
                         y_lo, y_hi,
                         z_lo, z_hi):
@@ -66,9 +93,9 @@ def solve_poisson_double_grid(rhs_coarse, rhs_fine, bcs, x_lo, x_hi,
         amrex_poisson_3d.amrex_finalize()
         return phi_numerical_coarse, phi_numerical_fine
 
-def solve_poisson(rhs, bcs, x_lo, x_hi,
+def solve_poisson_single_grid(rhs, bcs, x_lo, x_hi,
                         y_lo, y_hi,
-                        z_lo, z_hi, refine_radius):
+                        z_lo, z_hi):
     
     # Initialize AMReX
     amrex_poisson_3d.amrex_init([])
@@ -76,18 +103,8 @@ def solve_poisson(rhs, bcs, x_lo, x_hi,
     phi_numerical = []
     
     try:
-        # AMR grid parameters
-        coarse_res = 64
-        ref_ratio = 4
-        
-        print(f"\nAMR Grid Setup:")
-        print(f"  Coarse grid: {coarse_res}³ = {coarse_res**3:,} cells")
-        print(f"  Fine grid region: sphere of radius {refine_radius}")
-        print(f"  Refinement ratio: {ref_ratio}x")
-        print(f"  Effective resolution in center: {coarse_res*ref_ratio}³")
-        
         # Solve Poisson equation with AMR
-        phi_numerical = amrex_poisson_3d.solve_poisson_adaptive(
+        phi_numerical = amrex_poisson_3d.solve_poisson_single_grid(
             rhs,
             bcs, 
             x_lo=x_lo, x_hi=x_hi,

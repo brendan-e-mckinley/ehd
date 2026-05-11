@@ -403,6 +403,195 @@ py::array_t<double> solve_poisson_adaptive(
     return phi_out;
 }
 
+py::array_t<double> solve_poisson_single_grid(
+    py::array_t<double> rhs_in,
+    py::array_t<double> boundary_values,
+    double x_lo, double x_hi,
+    double y_lo, double y_hi,
+    double z_lo, double z_hi,
+    double tol,
+    int nghost,
+    bool fortran_order_rhs,
+    bool fortran_order_bc)
+{
+    check_3d_array(rhs_in);
+    check_3d_array(boundary_values);
+
+    py::buffer_info rhs_buf = rhs_in.request();
+    py::buffer_info bc_buf = boundary_values.request();
+
+    // Assuming shape is (nz, ny, nx) for C-order: [k, j, i]
+    int nx = static_cast<int>(rhs_buf.shape[2]);
+    int ny = static_cast<int>(rhs_buf.shape[1]);
+    int nz = static_cast<int>(rhs_buf.shape[0]);
+
+    // Create output numpy array for phi with same shape and layout as input (C order)
+    py::array_t<double> phi_out({nz, ny, nx});
+    auto phi_buf = phi_out.request();
+
+    // Build AMReX geometry
+    IntVect dom_lo(0, 0, 0);
+    IntVect dom_hi(nx-1, ny-1, nz-1);
+    Box domain(dom_lo, dom_hi);
+
+    RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
+                     {AMREX_D_DECL(x_hi, y_hi, z_hi)});
+    int coord = 0;
+    Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
+
+    Geometry geom;
+    geom.define(domain, real_box, coord, is_periodic);
+
+    // Single-level BoxArray / DistributionMapping
+    BoxArray ba(domain);
+    ba.maxSize(32); // chunking
+    DistributionMapping dm(ba);
+
+    int nlevs = 1;
+
+    Vector<Geometry>           geomVec(nlevs);
+    Vector<BoxArray>           baVec(nlevs);
+    Vector<DistributionMapping> dmVec(nlevs);
+
+    // Level 0: coarse
+    geomVec[0] = geom;
+    baVec[0]   = ba;     // your existing coarse BoxArray
+    dmVec[0]   = dm;
+
+    // --- MultiFabs for both levels ---
+    MultiFab mf_phi_0(baVec[0], dmVec[0], 1, nghost);
+    MultiFab mf_rhs_0(baVec[0], dmVec[0], 1, 0);
+
+    mf_phi_0.setVal(0.0);
+
+    // Copy Python RHS -> mf_rhs_0
+    for (MFIter mfi(mf_rhs_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_rhs_0.array(mfi);
+        const Real* dx      = geom.CellSize();
+        const Real* prob_lo = geom.ProbLo();
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            if (!fortran_order_rhs) {
+                size_t idx = static_cast<size_t>(k)*ny*nx + static_cast<size_t>(j)*nx + static_cast<size_t>(i);
+                arr(i,j,k) = *(((double*)rhs_buf.ptr) + idx);
+            } else {
+                size_t idx = static_cast<size_t>(i)*ny*nz + static_cast<size_t>(j)*nz + static_cast<size_t>(k);
+                arr(i,j,k) = *(((double*)rhs_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // Set Dirichlet ghost cells in mf_phi_0 from boundary_values
+    // AMReX reads the ghost cell *outside* the domain face for Dirichlet BCs
+    for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_0.array(mfi);
+
+        // x lo face: ghost cell at i = -1
+        if (bx.smallEnd(0) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + static_cast<size_t>(j)*nx + 0
+                    : static_cast<size_t>(0)*ny*nz + static_cast<size_t>(j)*nz + k;
+                arr(-1, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // x hi face: ghost cell at i = nx
+        if (bx.bigEnd(0) == nx-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + static_cast<size_t>(j)*nx + (nx-1)
+                    : static_cast<size_t>(nx-1)*ny*nz + static_cast<size_t>(j)*nz + k;
+                arr(nx, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // y lo face: ghost cell at j = -1
+        if (bx.smallEnd(1) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + 0 + i
+                    : static_cast<size_t>(i)*ny*nz + 0 + k;
+                arr(i, -1, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // y hi face: ghost cell at j = ny
+        if (bx.bigEnd(1) == ny-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(k)*ny*nx + static_cast<size_t>(ny-1)*nx + i
+                    : static_cast<size_t>(i)*ny*nz + static_cast<size_t>(ny-1)*nz + k;
+                arr(i, ny, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // z lo face: ghost cell at k = -1
+        if (bx.smallEnd(2) == 0) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? 0 + static_cast<size_t>(j)*nx + i
+                    : static_cast<size_t>(i)*ny*nz + static_cast<size_t>(j)*nz + 0;
+                arr(i, j, -1) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+
+        // z hi face: ghost cell at k = nz
+        if (bx.bigEnd(2) == nz-1) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? static_cast<size_t>(nz-1)*ny*nx + static_cast<size_t>(j)*nx + i
+                    : static_cast<size_t>(i)*ny*nz + static_cast<size_t>(j)*nz + (nz-1);
+                arr(i, j, nz) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // Fill coarse RHS ghost cells before interpolating
+    mf_rhs_0.FillBoundary(geomVec[0].periodicity());
+
+    // --- MLPoisson with 1 level ---
+    LPInfo info;
+    MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
+
+    mlpoisson.setDomainBC(
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)},
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)});
+
+    mlpoisson.setLevelBC(0, &mf_phi_0);
+
+    MLMG mlmg(mlpoisson);
+    mlmg.setVerbose(0);
+    mlmg.solve({&mf_phi_0}, {&mf_rhs_0}, tol, tol);
+
+    // Copy mf_phi_0 -> phi_out (C-order)
+    for (MFIter mfi(mf_phi_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_phi_0.const_array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                    size_t idx = static_cast<size_t>(k)*ny*nx +
+                                static_cast<size_t>(j)*nx +
+                                static_cast<size_t>(i);
+                    *(((double*)phi_buf.ptr) + idx) = arr(i,j,k);
+                }
+            }
+        }
+    }
+
+    return phi_out;
+}
+
 // py::array_t<double> apply_grad(
 //     py::array_t<double> x_in,
 //     py::array_t<double> boundary_values,
@@ -973,6 +1162,171 @@ std::pair<py::array_t<double>, py::array_t<double>> apply_poisson_double_grid(
     return {lap_out_coarse, lap_out_fine};
 }
 
+py::array_t<double> apply_poisson_single_grid(
+    py::array_t<double> x_in,
+    py::array_t<double> boundary_values,
+    double x_lo, double x_hi,
+    double y_lo, double y_hi,
+    double z_lo, double z_hi,
+    int nghost,
+    bool fortran_order_x,
+    bool fortran_order_bc)
+{
+    check_3d_array(x_in);
+    check_3d_array(boundary_values);
+
+    py::buffer_info x_buf  = x_in.request();
+    py::buffer_info bc_buf = boundary_values.request();
+
+    int nx_coarse = static_cast<int>(x_buf.shape[2]);
+    int ny_coarse = static_cast<int>(x_buf.shape[1]);
+    int nz_coarse = static_cast<int>(x_buf.shape[0]);
+
+    // Output arrays
+    py::array_t<double> lap_out({nz_coarse, ny_coarse, nx_coarse});
+
+    auto lap_buf = lap_out.request();
+
+    // Build geometry
+    IntVect dom_lo(0, 0, 0);
+    IntVect dom_hi(nx_coarse-1, ny_coarse-1, nz_coarse-1);
+    Box domain(dom_lo, dom_hi);
+
+    RealBox real_box({AMREX_D_DECL(x_lo, y_lo, z_lo)},
+                     {AMREX_D_DECL(x_hi, y_hi, z_hi)});
+    int coord = 0;
+    Array<int,AMREX_SPACEDIM> is_periodic{AMREX_D_DECL(0,0,0)};
+
+    Geometry geom;
+    geom.define(domain, real_box, coord, is_periodic);
+
+    BoxArray ba(domain);
+    ba.maxSize(32);
+    DistributionMapping dm(ba);
+
+    int nlevs = 1;
+
+    Vector<Geometry>            geomVec(nlevs);
+    Vector<BoxArray>            baVec(nlevs);
+    Vector<DistributionMapping> dmVec(nlevs);
+
+    geomVec[0] = geom;
+    baVec[0]   = ba;
+    dmVec[0]   = dm;
+
+    // MultiFabs
+    MultiFab mf_x_0(baVec[0], dmVec[0], 1, nghost);
+    MultiFab mf_lap_0(baVec[0], dmVec[0], 1, 0);
+
+    mf_lap_0.setVal(0.0);
+
+    // Copy coarse x_in
+    for (MFIter mfi(mf_x_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_x_0.array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            if (!fortran_order_x) {
+                size_t idx = (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + i;
+                arr(i,j,k) = *(((double*)x_buf.ptr) + idx);
+            } else {
+                size_t idx = (size_t)i*ny_coarse*nz_coarse + (size_t)j*nz_coarse + k;
+                arr(i,j,k) = *(((double*)x_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // Set Dirichlet ghost cells in mf_phi_0 (unchanged from original)
+    for (MFIter mfi(mf_x_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_x_0.array(mfi);
+
+        if (bx.smallEnd(0) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + 0
+                    : (size_t)0*ny_coarse*nz_coarse + (size_t)j*nz_coarse + k;
+                arr(-1, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.bigEnd(0) == nx_coarse-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + (nx_coarse-1)
+                    : (size_t)(nx_coarse-1)*ny_coarse*nz_coarse + (size_t)j*nz_coarse + k;
+                arr(nx_coarse, j, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.smallEnd(1) == 0) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + 0 + i
+                    : (size_t)i*ny_coarse*nz_coarse + 0 + k;
+                arr(i, -1, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.bigEnd(1) == ny_coarse-1) {
+            for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)k*ny_coarse*nx_coarse + (size_t)(ny_coarse-1)*nx_coarse + i
+                    : (size_t)i*ny_coarse*nz_coarse + (size_t)(ny_coarse-1)*nz_coarse + k;
+                arr(i, ny_coarse, k) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.smallEnd(2) == 0) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? 0 + (size_t)j*nx_coarse + i
+                    : (size_t)i*ny_coarse*nz_coarse + (size_t)j*nz_coarse + 0;
+                arr(i, j, -1) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+        if (bx.bigEnd(2) == nz_coarse-1) {
+            for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+            for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+                size_t idx = !fortran_order_bc
+                    ? (size_t)(nz_coarse-1)*ny_coarse*nx_coarse + (size_t)j*nx_coarse + i
+                    : (size_t)i*ny_coarse*nz_coarse + (size_t)j*nz_coarse + (nz_coarse-1);
+                arr(i, j, nz_coarse) = *(((double*)bc_buf.ptr) + idx);
+            }
+        }
+    }
+
+    // --- MLPoisson  ---
+    LPInfo info;
+    MLPoisson mlpoisson(geomVec, baVec, dmVec, info);
+
+    mlpoisson.setDomainBC(
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)},
+        {AMREX_D_DECL(LinOpBCType::Dirichlet, LinOpBCType::Dirichlet, LinOpBCType::Dirichlet)});
+
+    mlpoisson.setLevelBC(0, &mf_x_0);
+
+    MLMG mlmg(mlpoisson);
+    mlmg.setVerbose(0);
+    mlmg.apply({&mf_lap_0}, {&mf_x_0});
+
+    // Copy coarse solution out
+    for (MFIter mfi(mf_lap_0); mfi.isValid(); ++mfi) {
+        const Box& bx = mfi.validbox();
+        auto arr = mf_lap_0.const_array(mfi);
+        for (int k = bx.smallEnd(2); k <= bx.bigEnd(2); ++k)
+        for (int j = bx.smallEnd(1); j <= bx.bigEnd(1); ++j)
+        for (int i = bx.smallEnd(0); i <= bx.bigEnd(0); ++i) {
+            size_t idx = (size_t)k*ny_coarse*nx_coarse + (size_t)j*nx_coarse + i;
+            *(((double*)lap_buf.ptr) + idx) = arr(i,j,k);
+        }
+    }
+
+    return {lap_out};
+}
+
 std::pair<py::array_t<double>, py::array_t<double>> solve_poisson_adaptive_double_grid(
     py::array_t<double> rhs_in_coarse,
     py::array_t<double> rhs_in_fine,
@@ -1262,7 +1616,7 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("fortran_order_rhs") = false,
         py::arg("fortran_order_bc") = false,
         "Solve Poisson equation on both fine and coarse grid");
-    m.def("solve_poisson_adaptive", &solve_poisson_adaptive,
+    m.def("solve_poisson_single_grid", &solve_poisson_single_grid,
         py::arg("rhs_in"),
         py::arg("boundary_values"),
         py::arg("x_lo") = 0.0,
@@ -1275,10 +1629,23 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("nghost") = 1,
         py::arg("fortran_order_rhs") = false,
         py::arg("fortran_order_bc") = false,
-        "Solve Poisson equation with AMR refinement around a sphere at the domain center");
-    m.def("apply_poisson_double_grid", &apply_poisson_double_grid, 
-        py::arg("x_in_coarse"),
-        py::arg("x_in_fine"),
+        "Solve Poisson equation on a single grid");
+        m.def("solve_poisson_adaptive", &solve_poisson_adaptive,
+            py::arg("rhs_in"),
+            py::arg("boundary_values"),
+            py::arg("x_lo") = 0.0,
+            py::arg("x_hi") = 2.0*M_PI,
+            py::arg("y_lo") = 0.0,
+            py::arg("y_hi") = 2.0*M_PI,
+            py::arg("z_lo") = 0.0,
+            py::arg("z_hi") = 2.0*M_PI,
+            py::arg("tol") = 1e-10,
+            py::arg("nghost") = 1,
+            py::arg("fortran_order_rhs") = false,
+            py::arg("fortran_order_bc") = false,
+            "Solve Poisson equation with AMR refinement around a sphere at the domain center");
+    m.def("apply_poisson_single_grid", &apply_poisson_single_grid, 
+        py::arg("x_in"),
         py::arg("boundary_values"),
         py::arg("x_lo") = 0.0,
         py::arg("x_hi") = 2.0*M_PI,
@@ -1289,4 +1656,17 @@ PYBIND11_MODULE(amrex_poisson_3d, m) {
         py::arg("nghost") = 1,
         py::arg("fortran_order_x") = false,
         py::arg("fortran_order_bc") = false);
+        m.def("apply_poisson_double_grid", &apply_poisson_double_grid, 
+            py::arg("x_in_coarse"),
+            py::arg("x_in_fine"),
+            py::arg("boundary_values"),
+            py::arg("x_lo") = 0.0,
+            py::arg("x_hi") = 2.0*M_PI,
+            py::arg("y_lo") = 0.0,
+            py::arg("y_hi") = 2.0*M_PI,
+            py::arg("z_lo") = 0.0,
+            py::arg("z_hi") = 2.0*M_PI,
+            py::arg("nghost") = 1,
+            py::arg("fortran_order_x") = false,
+            py::arg("fortran_order_bc") = false);
 }
