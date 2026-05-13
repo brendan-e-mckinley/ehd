@@ -1063,11 +1063,25 @@ for inner_its in range(100000):
     err_curr_coarse = np.linalg.norm(schur_next_coarse - computedRHS_coarse) / np.linalg.norm(computedRHS_coarse)
     err_curr_fine = np.linalg.norm(schur_next_fine - computedRHS_fine) / np.linalg.norm(computedRHS_fine)
     
+    err_phi_coarse = np.linalg.norm(Phi_coarse - phi_true_coarse) / np.linalg.norm(phi_true_coarse)
+    err_phi_fine = np.linalg.norm(Phi_fine - phi_true_fine) / np.linalg.norm(phi_true_fine)
+    err_np_coarse = np.linalg.norm(Np_coarse - n_p_true_coarse) / np.linalg.norm(n_p_true_coarse)
+    err_np_fine = np.linalg.norm(Nm_fine - n_m_true_fine) / np.linalg.norm(n_m_true_fine)
+    err_nm_coarse = np.linalg.norm(Nm_coarse - n_m_true_coarse) / np.linalg.norm(n_m_true_coarse)
+    err_nm_fine = np.linalg.norm(Nm_fine - n_m_true_fine) / np.linalg.norm(n_m_true_fine)
+
     err_coarse.append(err_curr_coarse)
     err_fine.append(err_curr_fine)
     
     print(f'Iteration {inner_its}: coarse residual = {err_curr_coarse}')
     print(f'Iteration {inner_its}: fine residual = {err_curr_fine}')
+
+    print(f'Iteration {inner_its}: phi coarse residual = {err_phi_coarse}')
+    print(f'Iteration {inner_its}: phi fine residual = {err_phi_fine}')
+    print(f'Iteration {inner_its}: np coarse residual = {err_np_coarse}')
+    print(f'Iteration {inner_its}: np fine residual = {err_np_fine}')
+    print(f'Iteration {inner_its}: nm coarse residual = {err_nm_coarse}')
+    print(f'Iteration {inner_its}: nm fine residual = {err_nm_fine}')
     
     if err_curr_coarse < 5e-3 or err_curr_fine < 5e-3:
         print('Rphi = rho Converged!')
