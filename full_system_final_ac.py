@@ -43,7 +43,7 @@ m = 50
 # time parameters
 N_t = 2000
 dt = 0.01
-start_t = 0
+start_t = 119
 
 ##########################
 ######  GRID SETUP  ######
@@ -193,7 +193,7 @@ ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    -yib * beta_BC,
+    np.zeros(len(xib)) - sigma_bc,
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -203,33 +203,33 @@ ctxt_BCs = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
     Npm_BCs.ravel(order='F'),
-    -yib * beta_BC / delta_layer,
+    np.zeros(len(xib)) - sigma_bc / delta_layer,
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('BC_run_N_300_r0p25.mat')
+ld = loadmat('APS_110.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
-Ny_ld = int(ld['Ny'][0, 0])
-Nx_ld = int(ld['Nx'][0, 0])
-Nib_ld = int(ld['Nib'][0, 0])
+# Ny_ld = int(ld['Ny'][0, 0])
+# Nx_ld = int(ld['Nx'][0, 0])
+# Nib_ld = int(ld['Nib'][0, 0])
 
-# Xint_ld = ld['Xint']
-# Yint_ld = ld['Yint']
-# xib_ld = ld['xib']
+Xint_ld = ld['Xint']
+Yint_ld = ld['Yint']
+xib_ld = ld['xib']
 
-# Nx_ld = len(Xint_ld[0])
-# Ny_ld = len(Xint_ld[1])
-# Nib_ld = len(xib_ld[0])
+Nx_ld = len(Xint_ld[0])
+Ny_ld = len(Xint_ld[1])
+Nib_ld = len(xib_ld[0])
 
-# dtheta_ld = 2 * np.pi / (Nib_ld + 1)
-# theta_ld = np.arange(0, 2*np.pi - dtheta_ld, dtheta_ld)
+dtheta_ld = 2 * np.pi / (Nib_ld + 1)
+theta_ld = np.arange(0, 2*np.pi - dtheta_ld, dtheta_ld)
 
 sz = Ny_ld * Nx_ld
 
-ctxt_ld = ld['ctxt'].ravel(order='F')
+ctxt_ld = ld['ctxt_Rphi'].ravel(order='F')
 Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')
 N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
 N_m_ld = ctxt_ld[2*sz:3*sz].reshape(Ny_ld, Nx_ld, order='F')
@@ -239,7 +239,7 @@ Q_m_ld = ctxt_ld[3*sz+2*Nib_ld:3*sz+3*Nib_ld]
 
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
-theta_ld = ld['theta'].ravel()
+# theta_ld = ld['theta'].ravel()
 
 # Extract the coordinate vectors from the loaded grid
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
@@ -266,9 +266,12 @@ Phi = ctxt[:Ny*Nx].reshape((Ny, Nx), order='F')
 Np = ctxt[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
 Nm = ctxt[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
 
-## Start ion concentrations at equilibrium
-Np_prev = np.ones(Ny*Nx)
-Nm_prev = np.ones(Ny*Nx)
+## Start ion concentrations at prev values
+ld_prev = loadmat('APS_119.mat')
+ctxt_prev = ld_prev['ctxt_Rphi'].ravel(order='F')
+
+Np_prev = ctxt_prev[Ny*Nx:2*Nx*Ny]
+Nm_prev = ctxt_prev[2*Ny*Nx:3*Nx*Ny]
 
 ## Boundary conditions for Nu = F system
 f_bc_mat = np.zeros((Ny + 1, Nx))
@@ -324,7 +327,7 @@ delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
 #####  SOLVER SETUP  #####
 ##########################
 
-ac_value = beta_BC * np.cos(20 * np.pi * dt * start_t)
+ac_value = beta_BC * np.pi * np.cos(20 * np.pi * dt * start_t)
 
 ## Initialize variables for Rphi = rho solve
 schurRHS = b_Op_Schur(0, ctxt, ctxt_BCs_Schur, ac_value, Np_prev, Nm_prev, U_fluid, V_fluid)
@@ -603,8 +606,8 @@ for t_step in range(start_t,N_t):
             break
 
         # update Np_prev and Nm_prev
-        # Np_prev = Np.ravel(order='F')
-        # Nm_prev = Nm.ravel(order='F')
+        Np_prev = Np.ravel(order='F')
+        Nm_prev = Nm.ravel(order='F')
 
     # fig = plt.figure()
     # cmap = plt.cm.spring
@@ -684,8 +687,8 @@ for t_step in range(start_t,N_t):
 
     # 4. Apply the alpha mapping to the lines
     # stream.lines is a LineCollection
-    ax.set_facecolor('white')
-    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+    #ax.set_facecolor('white')
+    #stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=8, linewidth=1, arrowsize=1.5, zorder=1)
     # for arrow in ax.get_children():
     #     if isinstance(arrow, patches.FancyArrowPatch):
     #         arrow.set_alpha(0.3)
@@ -777,8 +780,8 @@ for t_step in range(start_t,N_t):
 
     # 4. Apply the alpha mapping to the lines
     # stream.lines is a LineCollection
-    ax.set_facecolor('white')
-    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+    #ax.set_facecolor('white')
+    #stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=8, linewidth=1, arrowsize=1.5, zorder=1)
     # for arrow in ax.get_children():
     #     if isinstance(arrow, patches.FancyArrowPatch):
     #         arrow.set_alpha(0.3)
@@ -870,8 +873,8 @@ for t_step in range(start_t,N_t):
 
     # 4. Apply the alpha mapping to the lines
     # stream.lines is a LineCollection
-    ax.set_facecolor('white')
-    stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+    #ax.set_facecolor('white')
+    #stream = ax.streamplot(X, Y, UFull_masked, VFull_masked, color='black', density=8, linewidth=1, arrowsize=1.5, zorder=1)
     # for arrow in ax.get_children():
     #     if isinstance(arrow, patches.FancyArrowPatch):
     #         arrow.set_alpha(0.3)
@@ -894,6 +897,223 @@ for t_step in range(start_t,N_t):
 
     plt.tight_layout()
     plt.savefig(f'img/APS_n_m_ac/APS_n_m_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.close()
+
+    # ------------------------------------------------------
+    # Plot N_m fluid (PyVista + matplotlib overlay)
+    # ------------------------------------------------------
+
+    radius = 0.25
+    new_cmap = plt.cm.get_cmap('turbo', 256)
+    new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
+    custom_cmap = ListedColormap(new_colors)
+
+    # Create structured grid
+    speed = np.sqrt(UFull**2 + VFull**2)
+    grid = pv.StructuredGrid(X, Y, np.zeros_like(speed))
+    grid["Speed"] = speed.flatten(order='F')
+    grid = grid.clip_box((-0.3, 0.3, -0.3, 0.3, -1, 1), invert=False)
+
+    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
+    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.set_background('white')
+    plotter.add_mesh(
+        grid,
+        scalars="Speed",
+        cmap=custom_cmap,
+        clim=[0, 1],
+        show_edges=False,
+        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
+        lighting=False,
+    )
+
+    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
+    plotter.add_mesh(disk, color="white", show_edges=False)
+
+    plotter.view_xy()
+    # Set camera to EXACTLY the data bounds with zero padding
+    plotter.camera.tight(padding=0.0)
+
+    pv_image = plotter.screenshot(None, return_img=True)
+    plotter.close()
+
+    # --- Composite in matplotlib ---
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
+
+    pv_img = pv_image.copy().astype(float)
+    # Make white pixels transparent
+    white_mask = np.all(pv_img >= 250, axis=2)
+    pv_rgba = np.dstack([pv_img, np.where(white_mask, 0, 255)]).astype(np.uint8)
+
+    ax.imshow(
+        pv_image,
+        extent=[-0.3, 0.3, -0.3, 0.3],
+        origin='upper',
+        aspect='equal',
+        zorder=0
+    )
+
+    # Add colorbar via matplotlib (matches custom_cmap exactly)
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='Speed', shrink=0.8)
+
+    circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
+    ax.add_patch(circle_patch)
+
+    ax.set_xlim(-0.3, 0.3)
+    ax.set_ylim(-0.3, 0.3)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'img/APS_m_fluid/APS_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.close()
+
+    # ------------------------------------------------------
+    # Plot U fluid (PyVista + matplotlib overlay)
+    # ------------------------------------------------------
+
+    radius = 0.25
+    new_cmap = plt.cm.get_cmap('turbo', 256)
+    new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
+    custom_cmap = ListedColormap(new_colors)
+
+    # Create structured grid
+    grid = pv.StructuredGrid(X, Y, np.zeros_like(UFull))
+    grid["Speed"] = UFull.flatten(order='F')
+    grid = grid.clip_box((-0.3, 0.3, -0.3, 0.3, -1, 1), invert=False)
+
+    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
+    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.set_background('white')
+    plotter.add_mesh(
+        grid,
+        scalars="Speed",
+        cmap=custom_cmap,
+        clim=[-1, 1],
+        show_edges=False,
+        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
+        lighting=False,
+    )
+
+    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
+    plotter.add_mesh(disk, color="white", show_edges=False)
+
+    plotter.view_xy()
+    # Set camera to EXACTLY the data bounds with zero padding
+    plotter.camera.tight(padding=0.0)
+
+    pv_image = plotter.screenshot(None, return_img=True)
+    plotter.close()
+
+    # --- Composite in matplotlib ---
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
+
+    pv_img = pv_image.copy().astype(float)
+    # Make white pixels transparent
+    white_mask = np.all(pv_img >= 250, axis=2)
+    pv_rgba = np.dstack([pv_img, np.where(white_mask, 0, 255)]).astype(np.uint8)
+
+    ax.imshow(
+        pv_image,
+        extent=[-0.3, 0.3, -0.3, 0.3],
+        origin='upper',
+        aspect='equal',
+        zorder=0
+    )
+
+    # Add colorbar via matplotlib (matches custom_cmap exactly)
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=-1, vmax=1))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='Speed', shrink=0.8)
+
+    circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
+    ax.add_patch(circle_patch)
+
+    ax.set_xlim(-0.3, 0.3)
+    ax.set_ylim(-0.3, 0.3)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'img/APS_U_fluid/APS_{t_step}.png', dpi=100, bbox_inches='tight')
+    plt.close()
+
+    # ------------------------------------------------------
+    # Plot U fluid (PyVista + matplotlib overlay)
+    # ------------------------------------------------------
+
+    radius = 0.25
+    new_cmap = plt.cm.get_cmap('turbo', 256)
+    new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
+    custom_cmap = ListedColormap(new_colors)
+
+    # Create structured grid
+    grid = pv.StructuredGrid(X, Y, np.zeros_like(VFull))
+    grid["Speed"] = VFull.flatten(order='F')
+    grid = grid.clip_box((-0.3, 0.3, -0.3, 0.3, -1, 1), invert=False)
+
+    # --- Render PyVista with NO chrome (no axes, no grid, no colorbar) ---
+    plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
+    plotter.set_background('white')
+    plotter.add_mesh(
+        grid,
+        scalars="Speed",
+        cmap=custom_cmap,
+        clim=[-1, 1],
+        show_edges=False,
+        show_scalar_bar=False,  # No colorbar - we'll add via matplotlib
+        lighting=False,
+    )
+
+    disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
+    plotter.add_mesh(disk, color="white", show_edges=False)
+
+    plotter.view_xy()
+    # Set camera to EXACTLY the data bounds with zero padding
+    plotter.camera.tight(padding=0.0)
+
+    pv_image = plotter.screenshot(None, return_img=True)
+    plotter.close()
+
+    # --- Composite in matplotlib ---
+    fig, ax = plt.subplots(figsize=(7, 7), dpi=100)
+
+    pv_img = pv_image.copy().astype(float)
+    # Make white pixels transparent
+    white_mask = np.all(pv_img >= 250, axis=2)
+    pv_rgba = np.dstack([pv_img, np.where(white_mask, 0, 255)]).astype(np.uint8)
+
+    ax.imshow(
+        pv_image,
+        extent=[-0.3, 0.3, -0.3, 0.3],
+        origin='upper',
+        aspect='equal',
+        zorder=0
+    )
+
+    # Add colorbar via matplotlib (matches custom_cmap exactly)
+    sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=-1, vmax=1))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='Speed', shrink=0.8)
+
+    circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
+    ax.add_patch(circle_patch)
+
+    ax.set_xlim(-0.3, 0.3)
+    ax.set_ylim(-0.3, 0.3)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X axis')
+    ax.set_ylabel('Y axis')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(f'img/APS_V_fluid/APS_{t_step}.png', dpi=100, bbox_inches='tight')
     plt.close()
 
     # # Save results
@@ -927,18 +1147,18 @@ for t_step in range(start_t,N_t):
     ac_value = beta_BC * np.pi * np.cos(20 * np.pi * t_next)
     phi_diff = Phi_exact(t_next, Xint, Yint) - Phi_exact(t, Xint, Yint)
 
+    # update guess
+    ld_guess = loadmat(f'APS_{t_step - 9}.mat')
+    ctxt_guess = ld_guess['ctxt_Rphi'].ravel(order='F')
+
     ctxt = np.concatenate([
         ctxt[:Ny*Nx] + phi_diff.ravel(order='F'),
-        ctxt[Ny*Nx:2*Nx*Ny],
-        ctxt[2*Ny*Nx:3*Nx*Ny],
+        ctxt_guess[Ny*Nx:2*Nx*Ny],
+        ctxt_guess[2*Ny*Nx:3*Nx*Ny],
         ctxt[3*Nx*Ny:3*Nx*Ny+Nib],
         ctxt[3*Nx*Ny+Nib:3*Nx*Ny+2*Nib],
         ctxt[3*Nx*Ny+2*Nib:]
     ])
-
-    # update Np_prev and Nm_prev
-    Np_prev = Np.ravel(order='F')
-    Nm_prev = Nm.ravel(order='F')
 
     ctxt_BCs_Schur = np.concatenate([
         Phi_BCs.ravel(order='F'),

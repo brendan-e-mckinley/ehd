@@ -267,7 +267,7 @@ Np = ctxt[Ny*Nx:2*Nx*Ny].reshape((Ny, Nx), order='F')
 Nm = ctxt[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
 
 ## Start ion concentrations at prev values
-ld_prev = loadmat('APS_46.mat')
+ld_prev = loadmat('APS_57.mat')
 ctxt_prev = ld_prev['ctxt_Rphi'].ravel(order='F')
 
 Np_prev = ctxt_prev[Ny*Nx:2*Nx*Ny]
