@@ -396,6 +396,38 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
 
     return Jphi
 
+def Grad_dot_Grad_neumann(Phi, N_pm, dx, dy, Nx, Ny):
+    Phi   = Phi.reshape(Ny, Nx).T    # shape (Nx, Ny)
+    N_pm  = N_pm.reshape(Ny, Nx).T
+
+    # --- x-derivatives ---
+    # central difference for interior columns (1..Nx-2)
+    Phi_x   = np.empty_like(Phi)
+    N_pm_x  = np.empty_like(N_pm)
+
+    Phi_x[1:-1, :]  = (Phi[2:, :]  - Phi[:-2, :])  * (0.5 / dx)   # central
+    Phi_x[0, :]     = (Phi[1, :]   - Phi[0, :])     / dx            # forward
+    Phi_x[-1, :]    = (Phi[-1, :]  - Phi[-2, :])    / dx            # backward
+
+    N_pm_x[1:-1, :] = (N_pm[2:, :] - N_pm[:-2, :]) * (0.5 / dx)
+    N_pm_x[0, :]    = (N_pm[1, :]  - N_pm[0, :])    / dx
+    N_pm_x[-1, :]   = (N_pm[-1, :] - N_pm[-2, :])   / dx
+
+    # --- y-derivatives ---
+    Phi_y   = np.empty_like(Phi)
+    N_pm_y  = np.empty_like(N_pm)
+
+    Phi_y[:, 1:-1]  = (Phi[:, 2:]  - Phi[:, :-2])  * (0.5 / dy)   # central
+    Phi_y[:, 0]     = (Phi[:, 1]   - Phi[:, 0])     / dy            # forward
+    Phi_y[:, -1]    = (Phi[:, -1]  - Phi[:, -2])    / dy            # backward
+
+    N_pm_y[:, 1:-1] = (N_pm[:, 2:] - N_pm[:, :-2]) * (0.5 / dy)
+    N_pm_y[:, 0]    = (N_pm[:, 1]  - N_pm[:, 0])    / dy
+    N_pm_y[:, -1]   = (N_pm[:, -1] - N_pm[:, -2])   / dy
+
+    G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
+    return G_d_G.ravel(order='F')
+
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
     Phi = Phi.reshape(Ny, Nx).T
@@ -566,7 +598,7 @@ def Build_RHS_rho_no_particle(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap, dLap
 
     return b_Ctx
 
-def Build_RHS_rho_neumann(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_rho_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -582,68 +614,68 @@ def Build_RHS_rho_neumann(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap_phi, Lap_
     Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
 
-    Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
-    N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
-    N_m_reshaped = N_m.reshape((Ny, Nx), order='F')
+    # Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
+    # N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
+    # N_m_reshaped = N_m.reshape((Ny, Nx), order='F')
 
-    # build full matrices
-    Phi_full = np.zeros((Ny+2, Nx+2))
-    N_p_full = np.ones((Ny+2, Nx+2))
-    N_m_full = np.ones((Ny+2, Nx+2))
+    # # build full matrices
+    # Phi_full = np.zeros((Ny+2, Nx+2))
+    # N_p_full = np.ones((Ny+2, Nx+2))
+    # N_m_full = np.ones((Ny+2, Nx+2))
 
-    Phi_full[1:-1, 1:-1] = Phi_reshaped
-    Phi_full[1:-1, 0] = Phi_reshaped[:, -1]
-    Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
-    Phi_full[0, :] = 0
-    Phi_full[-1, :] = 50
-    N_p_full[1:-1, 1:-1] = N_p_reshaped
-    N_m_full[1:-1, 1:-1] = N_m_reshaped
+    # Phi_full[1:-1, 1:-1] = Phi_reshaped
+    # Phi_full[1:-1, 0] = Phi_reshaped[:, -1]
+    # Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
+    # Phi_full[0, :] = 0
+    # Phi_full[-1, :] = 50
+    # N_p_full[1:-1, 1:-1] = N_p_reshaped
+    # N_m_full[1:-1, 1:-1] = N_m_reshaped
     
     dl2 = delta_layer**2
 
     computed_lap = Lap_npm @ Phi
     computed_lap = computed_lap + Phi_BC
     
-    alpha_p = 1
-    alpha_m = 1
+    # alpha_p = 1
+    # alpha_m = 1
 
-    dNdx_p = np.where(
-        U.reshape((Ny, Nx), order='F') > 0,
-        (N_p_full[1:-1, 1:-1] - N_p_full[1:-1, :-2]) / dx,
-        (N_p_full[1:-1, 2:]   - N_p_full[1:-1, 1:-1]) / dx
-    )
+    # dNdx_p = np.where(
+    #     U.reshape((Ny, Nx), order='F') > 0,
+    #     (N_p_full[1:-1, 1:-1] - N_p_full[1:-1, :-2]) / dx,
+    #     (N_p_full[1:-1, 2:]   - N_p_full[1:-1, 1:-1]) / dx
+    # )
 
-    dNdy_p = np.where(
-        V.reshape((Ny, Nx), order='F') > 0,
-        (N_p_full[1:-1, 1:-1] - N_p_full[:-2,  1:-1]) / dx,
-        (N_p_full[2:,  1:-1]  - N_p_full[1:-1, 1:-1]) / dx
-    )
+    # dNdy_p = np.where(
+    #     V.reshape((Ny, Nx), order='F') > 0,
+    #     (N_p_full[1:-1, 1:-1] - N_p_full[:-2,  1:-1]) / dx,
+    #     (N_p_full[2:,  1:-1]  - N_p_full[1:-1, 1:-1]) / dx
+    # )
 
-    dNdx_m = np.where(
-        U.reshape((Ny, Nx), order='F') > 0,
-        (N_m_full[1:-1, 1:-1] - N_m_full[1:-1, :-2]) / dx,
-        (N_m_full[1:-1, 2:]   - N_m_full[1:-1, 1:-1]) / dx
-    )
+    # dNdx_m = np.where(
+    #     U.reshape((Ny, Nx), order='F') > 0,
+    #     (N_m_full[1:-1, 1:-1] - N_m_full[1:-1, :-2]) / dx,
+    #     (N_m_full[1:-1, 2:]   - N_m_full[1:-1, 1:-1]) / dx
+    # )
 
-    dNdy_m = np.where(
-        V.reshape((Ny, Nx), order='F') > 0,
-        (N_m_full[1:-1, 1:-1] - N_m_full[:-2,  1:-1]) / dx,
-        (N_m_full[2:,  1:-1]  - N_m_full[1:-1, 1:-1]) / dx
-    )
+    # dNdy_m = np.where(
+    #     V.reshape((Ny, Nx), order='F') > 0,
+    #     (N_m_full[1:-1, 1:-1] - N_m_full[:-2,  1:-1]) / dx,
+    #     (N_m_full[2:,  1:-1]  - N_m_full[1:-1, 1:-1]) / dx
+    # )
 
-    adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
-    adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
+    # adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
+    # adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
     b_Ctx[:sz] =  spsolve(Lap_phi, -dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p, phibc, npbc))
-    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m, phibc, nmbc))
+    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, -N_p * computed_lap - N_p_BC - G_d_G_p(Phi, N_p)) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, N_m * computed_lap - N_m_BC + G_d_G_m(Phi, N_m)) #+ adv_m.ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
-def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -659,61 +691,61 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap_
     Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
 
-    Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
-    N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
-    N_m_reshaped = N_m.reshape((Ny, Nx), order='F')
+    # Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
+    # N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
+    # N_m_reshaped = N_m.reshape((Ny, Nx), order='F')
 
-    # build full matrices
-    Phi_full = np.zeros((Ny+2, Nx+2))
-    N_p_full = np.ones((Ny+2, Nx+2))
-    N_m_full = np.ones((Ny+2, Nx+2))
+    # # build full matrices
+    # Phi_full = np.zeros((Ny+2, Nx+2))
+    # N_p_full = np.ones((Ny+2, Nx+2))
+    # N_m_full = np.ones((Ny+2, Nx+2))
 
-    Phi_full[1:-1, 1:-1] = Phi_reshaped
-    Phi_full[1:-1, 0] = Phi_reshaped[:, 0]
-    Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
-    Phi_full[0, 1:-1] = Phi_reshaped[0, :]
-    Phi_full[-1, 1:-1] = Phi_reshaped[-1, :]
-    N_p_full[1:-1, 1:-1] = N_p_reshaped
-    N_m_full[1:-1, 1:-1] = N_m_reshaped
+    # Phi_full[1:-1, 1:-1] = Phi_reshaped
+    # Phi_full[1:-1, 0] = Phi_reshaped[:, 0]
+    # Phi_full[1:-1, -1] = Phi_reshaped[:, -1]
+    # Phi_full[0, 1:-1] = Phi_reshaped[0, :]
+    # Phi_full[-1, 1:-1] = Phi_reshaped[-1, :]
+    # N_p_full[1:-1, 1:-1] = N_p_reshaped
+    # N_m_full[1:-1, 1:-1] = N_m_reshaped
 
     dl2 = delta_layer**2
 
     computed_lap = Lap_npm @ Phi
     computed_lap = computed_lap + Phi_BC
     
-    alpha_p = 1
-    alpha_m = 1
+    # alpha_p = 1
+    # alpha_m = 1
 
-    dNdx_p = np.where(
-    U.reshape((Ny, Nx), order='F') > 0,
-        (N_p_full[1:-1, 1:-1] - N_p_full[1:-1, :-2]) / dx,
-        (N_p_full[1:-1, 2:]   - N_p_full[1:-1, 1:-1]) / dx
-    )
+    # dNdx_p = np.where(
+    # U.reshape((Ny, Nx), order='F') > 0,
+    #     (N_p_full[1:-1, 1:-1] - N_p_full[1:-1, :-2]) / dx,
+    #     (N_p_full[1:-1, 2:]   - N_p_full[1:-1, 1:-1]) / dx
+    # )
 
-    dNdy_p = np.where(
-        V.reshape((Ny, Nx), order='F') > 0,
-        (N_p_full[1:-1, 1:-1] - N_p_full[:-2,  1:-1]) / dx,
-        (N_p_full[2:,  1:-1]  - N_p_full[1:-1, 1:-1]) / dx
-    )
+    # dNdy_p = np.where(
+    #     V.reshape((Ny, Nx), order='F') > 0,
+    #     (N_p_full[1:-1, 1:-1] - N_p_full[:-2,  1:-1]) / dx,
+    #     (N_p_full[2:,  1:-1]  - N_p_full[1:-1, 1:-1]) / dx
+    # )
 
-    dNdx_m = np.where(
-        U.reshape((Ny, Nx), order='F') > 0,
-        (N_m_full[1:-1, 1:-1] - N_m_full[1:-1, :-2]) / dx,
-        (N_m_full[1:-1, 2:]   - N_m_full[1:-1, 1:-1]) / dx
-    )
+    # dNdx_m = np.where(
+    #     U.reshape((Ny, Nx), order='F') > 0,
+    #     (N_m_full[1:-1, 1:-1] - N_m_full[1:-1, :-2]) / dx,
+    #     (N_m_full[1:-1, 2:]   - N_m_full[1:-1, 1:-1]) / dx
+    # )
 
-    dNdy_m = np.where(
-        V.reshape((Ny, Nx), order='F') > 0,
-        (N_m_full[1:-1, 1:-1] - N_m_full[:-2,  1:-1]) / dx,
-        (N_m_full[2:,  1:-1]  - N_m_full[1:-1, 1:-1]) / dx
-    )
+    # dNdy_m = np.where(
+    #     V.reshape((Ny, Nx), order='F') > 0,
+    #     (N_m_full[1:-1, 1:-1] - N_m_full[:-2,  1:-1]) / dx,
+    #     (N_m_full[2:,  1:-1]  - N_m_full[1:-1, 1:-1]) / dx
+    # )
 
-    adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
-    adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
+    # adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
+    # adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
     b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p, phibc, npbc)
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m, phibc, nmbc)
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G_p(Phi, N_p) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G_m(Phi, N_m) #+ adv_m.ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -721,24 +753,27 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap_
     return b_Ctx
 
 class ConstrainedLapNeumannOperator:
-    def __init__(self, dLap, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
-        self.dLap = dLap
+    def __init__(self, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
+        self.Lap_phi = Lap_phi
+        self.Lap_npm = Lap_npm
         self.delta_layer = delta_layer
         self.Nx = Nx
         self.Ny = Ny
         self.Nib = Nib
         self.Sop_prime = Sop_prime
         self.Jop_prime = Jop_prime
-        self.ctxt_prev = None
-    
-    def set_context(self, ctxt_prev):
-        self.ctxt_prev = ctxt_prev.copy()  # Make a copy to avoid reference issues
-    
+
     def matvec(self, xx):
-        return Constrained_Lap_neumann(xx, self.ctxt_prev, self.dLap, self.delta_layer, 
+        return Constrained_Lap_neumann(xx, self.Lap_phi, self.Lap_npm, self.delta_layer, 
                               self.Nx, self.Ny, self.Nib, self.Sop_prime, self.Jop_prime)
     
-    
+def AxOpLinearOperatorNeumann(Lap_phi, Lap_npm, shape, Nx, Ny, delta_layer, Nib, Sop_prime, Jop_prime):
+    n = shape
+    def mv(ctxt):
+        res = Constrained_Lap_neumann(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
+        return res
+    return LinearOperator((n, n), matvec=mv)
+
 def AxOpLinearOperatorNoParticle(dLap, shape, Nx, Ny, delta_layer):
     n = shape
     def mv(ctxt):
