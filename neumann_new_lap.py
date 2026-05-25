@@ -22,7 +22,7 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 64 # 256; % number of grid points along one direction
+Nx = 32 # 256; % number of grid points along one direction
 L = 2.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -243,13 +243,13 @@ print(residual)
 
 ## Exact solutions
 def Phi_exact(x, y):
-    return 0 * x # beta_BC * (y + L/2) + 0 * x
+    return beta_BC * (y + L/2) + 0 * x
 def Npm_exact(x, y):
-    return 0 * x # + 1.0
+    return 0 * x + 1.0
 def Np_electrode(phi_1, np_1): #(phi_1, np_0, np_1, np_2):
-    return (np_1 * dx) / (phi_1 + dx) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
+    return (np_1) / (1 + phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
 def Nm_electrode(phi_1, nm_1):#(phi_1, nm_0, nm_1, nm_2):
-    return -(nm_1 * dx) / (phi_1 + dx) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
+    return (nm_1) / (1 - phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(Xint)
@@ -257,9 +257,9 @@ Np_BCs = np.zeros_like(Xint)
 Nm_BCs = np.zeros_like(Xint)
 
 Phi_BCs[-1,:] += (1/dy/dy) * 2 * beta_BC * dy
-Np_BCs[0,:] += (1/dy/dy) * Np_electrode(np.zeros_like(xint), np.zeros_like(xint))
+Np_BCs[0,:] += (1/dy/dy) * Np_electrode(np.zeros_like(xint), np.ones_like(xint))
 Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
-Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(np.zeros_like(xint), np.zeros_like(xint))
+Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(np.zeros_like(xint), np.ones_like(xint))
 Nm_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
 
 # Boundary conditions context for Schur solve of Rphi = rho 
@@ -283,11 +283,11 @@ ctxt_BCs = np.concatenate([
 ])
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('neumann.mat')
+ld = loadmat('neumann_new_lap.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
-Ny_ld = 64
-Nx_ld = 64
+Ny_ld = 32
+Nx_ld = 32
 Nib_ld = int(len(ld['xib']))
 sz = Ny_ld * Nx_ld
 
@@ -447,14 +447,14 @@ def Jop(P):
 def Jop_prime(P):
     return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
 
-def G_d_G_p(Phi, N_p):
-    return cpeo.Grad_dot_Grad_neumann(Phi, N_p, dx, dy, Nx, Ny)
+def G_d_G_p(Phi, N_p, electrode):
+    return cpeo.Grad_dot_Grad_neumann(Phi, N_p, dx, dy, Nx, Ny, beta_BC, electrode)
 
-def G_d_G_m(Phi, N_m):
-    return cpeo.Grad_dot_Grad_neumann(Phi, N_m, dx, dy, Nx, Ny)
+def G_d_G_m(Phi, N_m, electrode):
+    return cpeo.Grad_dot_Grad_neumann(Phi, N_m, dx, dy, Nx, Ny, beta_BC, electrode)
 
 def b_Op_Schur(ctxt, bcs, U_fluid, V_fluid): 
-    return cpeo.Build_RHS_Schur_System_neumann(ctxt, bcs, U_fluid, V_fluid, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+    return cpeo.Build_RHS_Schur_System_neumann(ctxt, bcs, U_fluid, V_fluid, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
 def b_Op(ctxt, bcs, U_fluid, V_fluid):
     return cpeo.Build_RHS_rho_neumann(ctxt, bcs, U_fluid, V_fluid, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
