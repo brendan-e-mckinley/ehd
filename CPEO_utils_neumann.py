@@ -396,37 +396,68 @@ def interpPhi(X, Y, xq, yq, Phi, delta, cut):
 
     return Jphi
 
-def Grad_dot_Grad_neumann(Phi, N_pm, dx, dy, Nx, Ny):
-    Phi   = Phi.reshape(Ny, Nx).T    # shape (Nx, Ny)
-    N_pm  = N_pm.reshape(Ny, Nx).T
+def Grad_dot_Grad_neumann(Phi, N_pm, dx, dy, Nx, Ny, E_0, electrode):
+    Phi  = Phi.reshape(Ny, Nx, order='F')   # shape (Ny, Nx)
+    N_pm = N_pm.reshape(Ny, Nx, order='F')
 
-    # --- x-derivatives ---
-    # central difference for interior columns (1..Nx-2)
-    Phi_x   = np.empty_like(Phi)
-    N_pm_x  = np.empty_like(N_pm)
+    # --- x-derivatives (axis 1) ---
+    Phi_x  = np.empty_like(Phi)
+    N_pm_x = np.empty_like(N_pm)
 
-    Phi_x[1:-1, :]  = (Phi[2:, :]  - Phi[:-2, :])  * (0.5 / dx)   # central
-    Phi_x[0, :]     = (Phi[1, :]   - Phi[0, :])     / dx            # forward
-    Phi_x[-1, :]    = (Phi[-1, :]  - Phi[-2, :])    / dx            # backward
+    Phi_x[:, 1:-1]  = (Phi[:, 2:]  - Phi[:, :-2])  * (0.5 / dx)  # central
+    Phi_x[:, 0]     = (Phi[:, 1]   - Phi[:, 0])    * (0.5 / dx)  # Neumann = 0
+    Phi_x[:, -1]    = (Phi[:, -1]  - Phi[:, -2])   * (0.5 / dx)  # Neumann = 0
 
-    N_pm_x[1:-1, :] = (N_pm[2:, :] - N_pm[:-2, :]) * (0.5 / dx)
-    N_pm_x[0, :]    = (N_pm[1, :]  - N_pm[0, :])    / dx
-    N_pm_x[-1, :]   = (N_pm[-1, :] - N_pm[-2, :])   / dx
+    N_pm_x[:, 1:-1] = (N_pm[:, 2:] - N_pm[:, :-2]) * (0.5 / dx)  # central
+    N_pm_x[:, 0]    = (N_pm[:, 1]  - N_pm[:, 0])   * (0.5 / dx)  # Neumann = 0
+    N_pm_x[:, -1]   = (N_pm[:, -1] - N_pm[:, -2])  * (0.5 / dx)  # Neumann = 0
 
-    # --- y-derivatives ---
-    Phi_y   = np.empty_like(Phi)
-    N_pm_y  = np.empty_like(N_pm)
+    # --- y-derivatives (axis 0) ---
+    Phi_y  = np.empty_like(Phi)
+    N_pm_y = np.empty_like(N_pm)
 
-    Phi_y[:, 1:-1]  = (Phi[:, 2:]  - Phi[:, :-2])  * (0.5 / dy)   # central
-    Phi_y[:, 0]     = (Phi[:, 1]   - Phi[:, 0])     / dy            # forward
-    Phi_y[:, -1]    = (Phi[:, -1]  - Phi[:, -2])    / dy            # backward
+    Phi_y[1:-1, :]  = (Phi[2:, :]  - Phi[:-2, :])              * (0.5 / dy)  # central
+    Phi_y[0, :]     = (Phi[1, :])                              * (0.5 / dy)  # Dirichlet = 0
+    Phi_y[-1, :]    = (Phi[-1, :]  - Phi[-2, :] + dy * E_0)    * (0.5 / dy)  # Neumann = E_0
 
-    N_pm_y[:, 1:-1] = (N_pm[:, 2:] - N_pm[:, :-2]) * (0.5 / dy)
-    N_pm_y[:, 0]    = (N_pm[:, 1]  - N_pm[:, 0])    / dy
-    N_pm_y[:, -1]   = (N_pm[:, -1] - N_pm[:, -2])   / dy
+    N_pm_y[1:-1, :] = (N_pm[2:, :] - N_pm[:-2, :]) * (0.5 / dy)  # central
+    N_pm_y[0, :]    = (N_pm[1, :]  - electrode[:])  * (0.5 / dy)  # Nonlinear Dirichlet
+    N_pm_y[-1, :]   = (1 - N_pm[-2, :])             * (0.5 / dy)  # Dirichlet = 1
 
     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
     return G_d_G.ravel(order='F')
+
+# def Grad_dot_Grad_neumann(Phi, N_pm, dx, dy, Nx, Ny, E_0, electrode):
+#     Phi   = Phi.reshape(Ny, Nx).T    # shape (Nx, Ny)
+#     N_pm  = N_pm.reshape(Ny, Nx).T
+
+#     # --- x-derivatives ---
+#     # central difference for interior columns (1..Nx-2)
+#     Phi_x   = np.empty_like(Phi)
+#     N_pm_x  = np.empty_like(N_pm)
+
+#     Phi_x[1:-1, :]  = (Phi[2:, :]  - Phi[:-2, :])  * (0.5 / dx)   # central
+#     Phi_x[0, :]     = (Phi[1, :]   - Phi[0, :])    * (0.5 / dx)   # Neumann = 0
+#     Phi_x[-1, :]    = (Phi[-1, :]  - Phi[-2, :])   * (0.5 / dx)   # Neumann = 0
+
+#     N_pm_x[1:-1, :] = (N_pm[2:, :] - N_pm[:-2, :]) * (0.5 / dx)   # central
+#     N_pm_x[0, :]    = (N_pm[1, :]  - N_pm[0, :])   * (0.5 / dx)   # Neumann = 0
+#     N_pm_x[-1, :]   = (N_pm[-1, :] - N_pm[-2, :])  * (0.5 / dx)   # Neumann = 0
+
+#     # --- y-derivatives ---
+#     Phi_y   = np.empty_like(Phi)
+#     N_pm_y  = np.empty_like(N_pm)
+
+#     Phi_y[:, 1:-1]  = (Phi[:, 2:]  - Phi[:, :-2])             * (0.5 / dy)    # central
+#     Phi_y[:, 0]     = (Phi[:, 1])                             * (0.5 / dy)    # Dirichlet = 0
+#     Phi_y[:, -1]    = (Phi[:, -1]  - Phi[:, -2] + dy * E_0)   * (0.5 / dy)    # Neumann = E_0
+
+#     N_pm_y[:, 1:-1] = (N_pm[:, 2:] - N_pm[:, :-2])    * (0.5 / dy)   # central
+#     N_pm_y[:, 0]    = (N_pm[:, 1]  - electrode[:])    * (0.5 / dy)   # Nonlinear Dirichlet
+#     N_pm_y[:, -1]   = (1 - N_pm[:, -2])               * (0.5 / dy)   # Dirichlet = 1       
+
+#     G_d_G = N_pm_x * Phi_x + N_pm_y * Phi_y
+#     return G_d_G.ravel()
 
 #@jit(nopython=True)
 def Grad_dot_Grad(Phi, N_pm, dx, dy, Nx, Ny, Phi_BC, N_pm_BC):
@@ -488,6 +519,33 @@ def Constrained_Lap_neumann(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, So
     A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
+    
+    return A_x_Ctx
+
+def Constrained_Lap_neumann_simple(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
+    A_x_Ctx = np.zeros_like(ctxt)
+    
+    sz = Nx * Ny
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    q_i = 3 * sz
+    Q = ctxt[q_i:q_i+Nib]
+    Q_p = ctxt[q_i+Nib:q_i+2*Nib]
+    Q_m = ctxt[q_i+2*Nib:q_i+3*Nib]
+    
+    SQ = Sop_prime(Q)
+    SQ_p = Sop_prime(Q_p)
+    SQ_m = Sop_prime(Q_m)
+    
+    dl2 = delta_layer**2
+
+    A_x_Ctx[:sz] = dl2 * Phi + spsolve(Lap_phi, 0.5*N_p - 0.5*N_m) #+ SQ.ravel(order='F')
+    A_x_Ctx[sz:2*sz] = N_p #+ SQ_p.ravel(order='F')
+    A_x_Ctx[2*sz:3*sz] = N_m #+ SQ_m.ravel(order='F')
+    # A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    # A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
+    # A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
     
     return A_x_Ctx
 
@@ -614,6 +672,11 @@ def Build_RHS_rho_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G
     Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
 
+    N_p_BC_reshaped = N_p_BC.reshape((Ny, Nx), order='F')
+    N_m_BC_reshaped = N_m_BC.reshape((Ny, Nx), order='F')
+    electrode_p = (dx**2) * N_p_BC_reshaped[0,:]
+    electrode_m = (dx**2) * N_m_BC_reshaped[0,:]
+
     # Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
     # N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
     # N_m_reshaped = N_m.reshape((Ny, Nx), order='F')
@@ -633,7 +696,7 @@ def Build_RHS_rho_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G
     
     dl2 = delta_layer**2
 
-    computed_lap = Lap_npm @ Phi
+    computed_lap = Lap_phi @ Phi
     computed_lap = computed_lap + Phi_BC
     
     # alpha_p = 1
@@ -666,16 +729,16 @@ def Build_RHS_rho_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G
     # adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     # adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
-    b_Ctx[:sz] =  spsolve(Lap_phi, -dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, -N_p * computed_lap - N_p_BC - G_d_G_p(Phi, N_p)) #+ adv_p.ravel(order='F')
-    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, N_m * computed_lap - N_m_BC + G_d_G_m(Phi, N_m)) #+ adv_m.ravel(order='F')
+    b_Ctx[:sz] =  spsolve(Lap_phi, dl2 * Phi_BC)
+    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, -N_p * computed_lap + N_p_BC - G_d_G_p(Phi, N_p, electrode_p)) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, N_m * computed_lap + N_m_BC + G_d_G_m(Phi, N_m, electrode_m)) #+ adv_m.ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
-def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_rho_neumann_simplest(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -690,6 +753,49 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_npm, G_d_G_p, G_d_G
     Q_BC = ctxt_BCs[q_i:q_i+Nib]
     Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
     Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+
+    N_p_BC_reshaped = N_p_BC.reshape((Ny, Nx), order='F')
+    N_m_BC_reshaped = N_m_BC.reshape((Ny, Nx), order='F')
+    electrode_p = (dx**2) * N_p_BC_reshaped[0,:]
+    electrode_m = (dx**2) * N_m_BC_reshaped[0,:]
+    
+    dl2 = delta_layer**2
+
+    computed_lap = Lap_phi @ Phi
+    #computed_lap = computed_lap + Phi_BC
+
+    gdgp = G_d_G_p(Phi, N_p, electrode_p)
+    gdgm = G_d_G_m(Phi, N_m, electrode_m)
+    
+    b_Ctx[:sz] =  spsolve(Lap_phi, dl2 * Phi_BC)
+    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, -N_p * computed_lap + N_p_BC - gdgp) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, N_m * computed_lap + N_m_BC + gdgm) #+ adv_m.ravel(order='F')
+    # b_Ctx[q_i:q_i+Nib] = Q_BC
+    # b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    # b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
+    
+    return b_Ctx
+
+def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+    b_Ctx = np.zeros_like(ctxt_BCs)
+    
+    sz = Nx * Ny
+    q_i = 3 * sz
+    Phi = ctxt[:sz]
+    N_p = ctxt[sz:2*sz]
+    N_m = ctxt[2*sz:3*sz]
+    
+    Phi_BC = ctxt_BCs[:sz]
+    N_p_BC = ctxt_BCs[sz:2*sz]
+    N_m_BC = ctxt_BCs[2*sz:3*sz]
+    Q_BC = ctxt_BCs[q_i:q_i+Nib]
+    Q_p_BC = ctxt_BCs[q_i+Nib:q_i+2*Nib]
+    Q_m_BC = ctxt_BCs[q_i+2*Nib:q_i+3*Nib]
+
+    N_p_BC_reshaped = N_p_BC.reshape((Ny, Nx), order='F')
+    N_m_BC_reshaped = N_m_BC.reshape((Ny, Nx), order='F')
+    electrode_p = (dx**2) * N_p_BC_reshaped[0,:]
+    electrode_m = (dx**2) * N_m_BC_reshaped[0,:]
 
     # Phi_reshaped = Phi.reshape((Ny, Nx), order='F')
     # N_p_reshaped = N_p.reshape((Ny, Nx), order='F')
@@ -710,8 +816,8 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_npm, G_d_G_p, G_d_G
 
     dl2 = delta_layer**2
 
-    computed_lap = Lap_npm @ Phi
-    computed_lap = computed_lap + Phi_BC
+    computed_lap = Lap_phi @ Phi
+    computed_lap = computed_lap - Phi_BC
     
     # alpha_p = 1
     # alpha_m = 1
@@ -743,9 +849,9 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_npm, G_d_G_p, G_d_G
     # adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     # adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
-    b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G_p(Phi, N_p) #+ adv_p.ravel(order='F')
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G_m(Phi, N_m) #+ adv_m.ravel(order='F')
+    b_Ctx[:sz] =  dl2 * Phi_BC
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap + N_p_BC - G_d_G_p(Phi, N_p, electrode_p) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + N_m_BC + G_d_G_m(Phi, N_m, electrode_m) #+ adv_m.ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -771,6 +877,13 @@ def AxOpLinearOperatorNeumann(Lap_phi, Lap_npm, shape, Nx, Ny, delta_layer, Nib,
     n = shape
     def mv(ctxt):
         res = Constrained_Lap_neumann(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
+        return res
+    return LinearOperator((n, n), matvec=mv)
+
+def AxOpLinearOperatorNeumannSimple(Lap_phi, Lap_npm, shape, Nx, Ny, delta_layer, Nib, Sop_prime, Jop_prime):
+    n = shape
+    def mv(ctxt):
+        res = Constrained_Lap_neumann_simple(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
         return res
     return LinearOperator((n, n), matvec=mv)
 

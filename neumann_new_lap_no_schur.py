@@ -22,7 +22,7 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 64 # 256; % number of grid points along one direction
+Nx = 128 # 256; % number of grid points along one direction
 L = 2.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -37,7 +37,7 @@ delta_layer = 5 * dx #0.1  # 5*dx; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
 # Anderson acceleration parameters
-beta = 0.2
+beta = 1.0 #0.2 
 m = 50
 
 # time parameters
@@ -247,9 +247,9 @@ def Phi_exact(x, y):
 def Npm_exact(x, y):
     return 0 * x # + 1.0
 def Np_electrode(phi_1, np_1): #(phi_1, np_0, np_1, np_2):
-    return (np_1 * dx) / (phi_1 + dx) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
+    return (np_1) / (1 + phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
 def Nm_electrode(phi_1, nm_1):#(phi_1, nm_0, nm_1, nm_2):
-    return -(nm_1 * dx) / (phi_1 + dx) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
+    return (nm_1) / (1 - phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(Xint)
@@ -257,9 +257,9 @@ Np_BCs = np.zeros_like(Xint)
 Nm_BCs = np.zeros_like(Xint)
 
 Phi_BCs[-1,:] += (1/dy/dy) * 2 * beta_BC * dy
-Np_BCs[0,:] += (1/dy/dy) * Np_electrode(np.ones_like(xint), np.ones_like(xint))
+Np_BCs[0,:] += (1/dy/dy) * Np_electrode(np.zeros_like(xint), np.ones_like(xint))
 Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
-Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(np.ones_like(xint), np.ones_like(xint))
+Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(np.zeros_like(xint), np.ones_like(xint))
 Nm_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
 
 # Boundary conditions context for Schur solve of Rphi = rho 
@@ -267,9 +267,9 @@ ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Np_BCs.ravel(order='F'),
     Nm_BCs.ravel(order='F'),
-    np.zeros(len(xib)) - (sigma_bc),
-    np.zeros(len(xib)),
-    np.zeros(len(xib))
+    # np.zeros(len(xib)) - (sigma_bc),
+    # np.zeros(len(xib)),
+    # np.zeros(len(xib))
 ])
 
 # Boundary conditions context for full Rphi = rho system
@@ -277,13 +277,13 @@ ctxt_BCs = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Np_BCs.ravel(order='F'),
     Nm_BCs.ravel(order='F'),
-    np.zeros(len(xib)) - (sigma_bc/delta_layer),
-    np.zeros(len(xib)),
-    np.zeros(len(xib))
+    # np.zeros(len(xib)) - (sigma_bc/delta_layer),
+    # np.zeros(len(xib)),
+    # np.zeros(len(xib))
 ])
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('neumann.mat')
+ld = loadmat('neumann_new_lap_no_schur.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
 Ny_ld = 64
@@ -380,16 +380,16 @@ x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 
 # Interpolate initial guesses
-# Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
-# N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-# N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
+N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
+N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 # Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
 # Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
 # Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
 
-Phi_init = Phi_exact(Xint, Yint)
-N_p_init = Npm_exact(Xint, Yint)
-N_m_init = Npm_exact(Xint, Yint)
+# Phi_init = Phi_exact(Xint, Yint)
+# N_p_init = Npm_exact(Xint, Yint)
+# N_m_init = Npm_exact(Xint, Yint)
 Q_init = np.zeros(Nib)
 Q_p_init = np.zeros(Nib)
 Q_m_init = np.zeros(Nib)
@@ -398,9 +398,9 @@ ctxt = np.concatenate([
     Phi_init.ravel(order='F'),
     N_p_init.ravel(order='F'),
     N_m_init.ravel(order='F'),
-    Q_init,
-    Q_p_init,
-    Q_m_init
+    # Q_init,
+    # Q_p_init,
+    # Q_m_init
 ])
 
 Phi = ctxt[:Ny*Nx].reshape((Ny, Nx), order='F')
@@ -447,22 +447,72 @@ def Jop(P):
 def Jop_prime(P):
     return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
 
-def G_d_G_p(Phi, N_p):
-    return cpeo.Grad_dot_Grad_neumann(Phi, N_p, dx, dy, Nx, Ny)
+def G_d_G_p(Phi, N_p, electrode):
+    return cpeo.Grad_dot_Grad_neumann(Phi, N_p, dx, dy, Nx, Ny, beta_BC, electrode)
 
-def G_d_G_m(Phi, N_m):
-    return cpeo.Grad_dot_Grad_neumann(Phi, N_m, dx, dy, Nx, Ny)
+def G_d_G_m(Phi, N_m, electrode):
+    return cpeo.Grad_dot_Grad_neumann(Phi, N_m, dx, dy, Nx, Ny, beta_BC, electrode)
 
 def b_Op_Schur(ctxt, bcs, U_fluid, V_fluid): 
     return cpeo.Build_RHS_Schur_System_neumann(ctxt, bcs, U_fluid, V_fluid, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
 def b_Op(ctxt, bcs, U_fluid, V_fluid):
-    return cpeo.Build_RHS_rho_neumann(ctxt, bcs, U_fluid, V_fluid, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
+    return cpeo.Build_RHS_rho_neumann_simplest(ctxt, bcs, U_fluid, V_fluid, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
 
 def AxOp(ctxt):
     return cpeo.Constrained_Lap(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
 
 delta_x, delta_y = stokes.make_composite_deltas(dx, n=3)
+
+## Exact solutions
+def Phi_test(x, y):
+    return beta_BC * (y + L/2)
+def Npm_test(x, y):
+    return (y**2) / ((L/2)**2) + np.cos(x) * np.sin(y)
+def gdg_test(x, y):
+    return (beta_BC) * ((8 * y) / (L**2) + np.cos(x) * np.cos(y))
+
+phi_tester = Phi_test(Xint, Yint)
+np_tester = Npm_test(Xint, Yint)
+gdg_tester = gdg_test(Xint, Yint)
+
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xint, Yint, phi_tester, cmap=cmap, edgecolor='none')
+ax.set_title("Phi test")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xint, Yint, np_tester, cmap=cmap, edgecolor='none')
+ax.set_title("Npm test")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+plt.show()
+
+# Test G_d_G
+res = G_d_G_p(phi_tester, np_tester, np.ones_like(xint))
+
+residual = np.linalg.norm(res - gdg_tester.ravel(order='F')) / np.linalg.norm(gdg_tester.ravel(order='F'))
+
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xint, Yint, res.reshape(Ny, Nx, order='F'), cmap=cmap, edgecolor='none')
+ax.set_title("computed gdg test")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(Xint, Yint, gdg_tester, cmap=cmap, edgecolor='none')
+ax.set_title("exact gdg test")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+plt.show()
+
+print(f'Gdg residual: {residual}')
 
 ##########################
 #####  SOLVER SETUP  #####
@@ -499,8 +549,8 @@ u_n = ctxt.copy()
 # p_next = cpeo.solve_from_svd(U_schur, Sigma_schur, Vh_schur, computedRHS)
 # G_u_n = cpeo.post_processing_compute_R_neumann(Lap_phi, Lap_npm, p_next, schurRHS, Nx, Ny, Nib, delta_layer, Sop_prime)
 
-shape = 3 * Nx * Ny + 3 * Nib
-AxOperator = cpeo.AxOpLinearOperatorNeumann(Lap_phi, Lap_npm, shape, Nx, Ny, delta_layer, Nib, Sop_prime, Jop_prime)
+shape = 3 * Nx * Ny #+ 3 * Nib
+AxOperator = cpeo.AxOpLinearOperatorNeumannSimple(Lap_phi, Lap_npm, shape, Nx, Ny, delta_layer, Nib, Sop_prime, Jop_prime)
 
 computedRHS = b_Op(ctxt, ctxt_BCs, U_fluid, V_fluid)
 DU = np.full((len(computedRHS), m), np.nan)
@@ -649,7 +699,7 @@ for t_step in range(N_t):
         Nm = u_next[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
         
         # Check convergence
-        res_next = cpeo.Constrained_Lap_neumann(u_next, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
+        res_next = cpeo.Constrained_Lap_neumann_simple(u_next, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime)
         err_curr = np.linalg.norm(res_next - computedRHS) / np.linalg.norm(computedRHS)
         
         err.append(err_curr)
@@ -676,9 +726,9 @@ for t_step in range(N_t):
             Phi_BCs.ravel(order='F'),
             Np_BCs.ravel(order='F'),
             Nm_BCs.ravel(order='F'),
-            np.zeros(len(xib)) - (sigma_bc),
-            np.zeros(len(xib)),
-            np.zeros(len(xib))
+            # np.zeros(len(xib)) - (sigma_bc),
+            # np.zeros(len(xib)),
+            # np.zeros(len(xib))
         ])
 
         # Boundary conditions context for full Rphi = rho system
@@ -686,9 +736,9 @@ for t_step in range(N_t):
             Phi_BCs.ravel(order='F'),
             Np_BCs.ravel(order='F'),
             Nm_BCs.ravel(order='F'),
-            np.zeros(len(xib)) - (sigma_bc/delta_layer),
-            np.zeros(len(xib)),
-            np.zeros(len(xib))
+            # np.zeros(len(xib)) - (sigma_bc/delta_layer),
+            # np.zeros(len(xib)),
+            # np.zeros(len(xib))
         ])
 
         ctxt = u_next.copy()
