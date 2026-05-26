@@ -103,15 +103,15 @@ e_y = (1/dy**2) * np.ones(Ny)
 D2_d_y_phi = spdiags([e_y, -2*e_y, e_y], [-1, 0, 1], Ny, Ny)
 
 dok_mat_y_phi = D2_d_y_phi.todok()
-dok_mat_y_phi[-1, -2] *= 2
+dok_mat_y_phi[-1, -1] = -(1/dy**2)
 D2_d_y_phi = dok_mat_y_phi.tocsr()
 
 e_x = (1/dx**2) * np.ones(Nx) 
 D2_d_x_phi = spdiags([e_x, -2*e_x, e_x], [-1, 0, 1], Nx, Nx)
 
 dok_mat_x_phi = D2_d_x_phi.todok()
-dok_mat_x_phi[0, 1] *= 2
-dok_mat_x_phi[-1, -2] *= 2
+dok_mat_x_phi[0, 0] = -(1/dx**2)
+dok_mat_x_phi[-1, -1] = -(1/dx**2)
 D2_d_x_phi = dok_mat_x_phi.tocsr()
 
 I_nx = eye(Nx)
@@ -119,7 +119,7 @@ I_ny = eye(Ny)
 Lap_phi = -(kron(I_nx, D2_d_y_phi) + kron(D2_d_x_phi, I_ny))
 
 rhs_phi = np.zeros([Nx, Ny])
-rhs_phi[-1, :] = 2 * beta_BC / dx
+rhs_phi[-1, :] = beta_BC / dx
 print(rhs_phi.ravel(order='F'))
 
 phi_solved = spsolve(Lap_phi, rhs_phi.ravel(order='F'))
@@ -142,19 +142,21 @@ print(residual)
 D2_d_y_npm = spdiags([e_y, -2*e_y, e_y], [-1, 0, 1], Ny, Ny)
 
 dok_mat_y_npm = D2_d_y_npm.todok()
+# # neumann = 0:
+# dok_mat_y_npm[-1, -1] = -(1/dy**2)
 D2_d_y_npm = dok_mat_y_npm.tocsr()
 
 D2_d_x_npm = spdiags([e_x, -2*e_x, e_x], [-1, 0, 1], Nx, Nx)
 
 dok_mat_x_npm = D2_d_x_npm.todok()
-dok_mat_x_npm[0, 1] *= 2
-dok_mat_x_npm[-1, -2] *= 2
+dok_mat_x_npm[0, 0] = -(1/dy**2)
+dok_mat_x_npm[-1, -1] = -(1/dy**2)
 D2_d_x_npm = dok_mat_x_npm.tocsr()
 
 Lap_npm = -(kron(I_nx, D2_d_y_npm) + kron(D2_d_x_npm, I_ny))
 
 rhs_test_npm = np.zeros([Nx, Ny])
-rhs_test_npm[-1, :] = 1 / (dx**2)
+rhs_test_npm[-1, :] = 1 / (dy**2)
 print(rhs_test_npm.ravel(order='F'))
 
 npm_solved = spsolve(Lap_npm, rhs_test_npm.ravel(order='F'))
@@ -247,16 +249,16 @@ def Phi_exact(x, y):
 def Npm_exact(x, y):
     return 0 * x # + 1.0
 def Np_electrode(phi_1, np_1): #(phi_1, np_0, np_1, np_2):
-    return (np_1) / (1 + phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
+    return (np_1) / (1 - phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
 def Nm_electrode(phi_1, nm_1):#(phi_1, nm_0, nm_1, nm_2):
-    return (nm_1) / (1 - phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
+    return (nm_1) / (1 + phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(Xint)
 Np_BCs = np.zeros_like(Xint)
 Nm_BCs = np.zeros_like(Xint)
 
-Phi_BCs[-1,:] += (1/dy/dy) * 2 * beta_BC * dy
+Phi_BCs[-1,:] += (1/dy/dy) * beta_BC * dy
 Np_BCs[0,:] += (1/dy/dy) * Np_electrode(np.zeros_like(xint), np.ones_like(xint))
 Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
 Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(np.zeros_like(xint), np.ones_like(xint))
@@ -448,10 +450,10 @@ def Jop_prime(P):
     return cpeo.interpPhi_prime(Xint, Yint, xib, yib, n_x, n_y, P, delta_r, cut)
 
 def G_d_G_p(Phi, N_p, electrode):
-    return cpeo.Grad_dot_Grad_neumann(Phi, N_p, dx, dy, Nx, Ny, beta_BC, electrode)
+    return cpeo.Grad_dot_Grad_neumann_far_field(Phi, N_p, dx, dy, Nx, Ny, beta_BC, electrode)
 
 def G_d_G_m(Phi, N_m, electrode):
-    return cpeo.Grad_dot_Grad_neumann(Phi, N_m, dx, dy, Nx, Ny, beta_BC, electrode)
+    return cpeo.Grad_dot_Grad_neumann_far_field(Phi, N_m, dx, dy, Nx, Ny, beta_BC, electrode)
 
 def b_Op_Schur(ctxt, bcs, U_fluid, V_fluid): 
     return cpeo.Build_RHS_Schur_System_neumann(ctxt, bcs, U_fluid, V_fluid, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx)
@@ -715,10 +717,10 @@ for t_step in range(N_t):
         Np_BCs = np.zeros_like(Xint)
         Nm_BCs = np.zeros_like(Xint)
 
-        Phi_BCs[-1,:] += (1/dy/dy) * 2 * beta_BC * dy
-        Np_BCs[0,:] += (1/dy/dy) * Np_electrode(Phi[1,:], Np[1,:])
+        Phi_BCs[-1,:] += (1/dy/dy) * beta_BC * dy
+        Np_BCs[0,:] += (1/dy/dy) * Np_electrode(Phi[0,:], Np[0,:])
         Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
-        Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(Phi[1,:], Nm[1,:])
+        Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(Phi[0,:], Nm[0,:])
         Nm_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
 
         # Boundary conditions context for Schur solve of Rphi = rho 
