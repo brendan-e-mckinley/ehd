@@ -512,13 +512,13 @@ def Constrained_Lap_neumann(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, So
     
     dl2 = delta_layer**2
 
-    A_x_Ctx[:sz] = dl2 * Phi + spsolve(Lap_phi, 0.5*N_p - 0.5*N_m + SQ.ravel(order='F'))
-    A_x_Ctx[sz:2*sz] = N_p + spsolve(Lap_npm, SQ_p.ravel(order='F'))
-    A_x_Ctx[2*sz:3*sz] = N_m + spsolve(Lap_npm, SQ_m.ravel(order='F'))
+    A_x_Ctx[:sz] = dl2 * Phi - spsolve(Lap_phi, 0.5*N_p - 0.5*N_m + SQ.ravel(order='F'))
+    A_x_Ctx[sz:2*sz] = N_p - spsolve(Lap_npm, SQ_p.ravel(order='F'))
+    A_x_Ctx[2*sz:3*sz] = N_m - spsolve(Lap_npm, SQ_m.ravel(order='F'))
     A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+Nib:q_i+2*Nib] = Jop_prime(N_p.reshape(Ny, Nx, order='F'))
     A_x_Ctx[q_i+2*Nib:q_i+3*Nib] = Jop_prime(N_m.reshape(Ny, Nx, order='F'))
-    
+
     return A_x_Ctx
 
 def Constrained_Lap_neumann_simple(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, Nib, Sop_prime, Jop_prime):
@@ -539,7 +539,7 @@ def Constrained_Lap_neumann_simple(ctxt, Lap_phi, Lap_npm, delta_layer, Nx, Ny, 
     
     dl2 = delta_layer**2
 
-    A_x_Ctx[:sz] = dl2 * Phi + spsolve(Lap_phi, 0.5*N_p - 0.5*N_m) #+ SQ.ravel(order='F')
+    A_x_Ctx[:sz] = dl2 * Phi - spsolve(Lap_phi, 0.5*N_p - 0.5*N_m) #+ SQ.ravel(order='F')
     A_x_Ctx[sz:2*sz] = N_p #+ SQ_p.ravel(order='F')
     A_x_Ctx[2*sz:3*sz] = N_m #+ SQ_m.ravel(order='F')
     # A_x_Ctx[q_i:q_i+Nib] = Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -576,12 +576,12 @@ def apply_Ainv_R_neumann(Lap_phi, Lap_npm, target_vec, delta_layer):
     dl2 = delta_layer**2
 
     # second and third blocks are straightforward
-    result_vec_2 = spsolve(Lap_npm, target_vec_2.ravel(order='F'))
-    result_vec_3 = spsolve(Lap_npm, target_vec_3.ravel(order='F'))
+    result_vec_2 = -spsolve(Lap_npm, target_vec_2.ravel(order='F'))
+    result_vec_3 = -spsolve(Lap_npm, target_vec_3.ravel(order='F'))
 
     # use these results to compute first block 
     rhs = target_vec_1.ravel(order='F') - 0.5 * result_vec_2 + 0.5 * result_vec_3
-    result_vec_1 = spsolve(Lap_phi, rhs / dl2)
+    result_vec_1 = -spsolve(Lap_phi, rhs / dl2)
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
@@ -695,8 +695,8 @@ def Build_RHS_rho_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G
     
     dl2 = delta_layer**2
 
-    computed_lap = Lap_phi @ Phi
-    # computed_lap = computed_lap + Phi_BC
+    computed_lap = -Lap_phi @ Phi
+    computed_lap = computed_lap + Phi_BC
     
     # alpha_p = 1
     # alpha_m = 1
@@ -728,13 +728,13 @@ def Build_RHS_rho_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G
     # adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     # adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
-    b_Ctx[:sz] =  spsolve(Lap_phi, dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, -N_p * computed_lap + N_p_BC - G_d_G_p(Phi, N_p, electrode_p)) #+ adv_p.ravel(order='F')
-    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, N_m * computed_lap + N_m_BC + G_d_G_m(Phi, N_m, electrode_m)) #+ adv_m.ravel(order='F')
+    b_Ctx[:sz] =  -spsolve(Lap_phi, -dl2 * Phi_BC)
+    b_Ctx[sz:2*sz] =  -spsolve(Lap_npm, -N_p * computed_lap - N_p_BC - G_d_G_p(Phi, N_p, electrode_p)) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  -spsolve(Lap_npm, N_m * computed_lap - N_m_BC + G_d_G_m(Phi, N_m, electrode_m)) #+ adv_m.ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
-    
+
     return b_Ctx
 
 def Build_RHS_rho_neumann_simplest(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
@@ -760,15 +760,15 @@ def Build_RHS_rho_neumann_simplest(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G
     
     dl2 = delta_layer**2
 
-    computed_lap = Lap_phi @ Phi
+    computed_lap = -Lap_phi @ Phi
     #computed_lap = computed_lap + Phi_BC
 
     gdgp = G_d_G_p(Phi, N_p, electrode_p)
     gdgm = G_d_G_m(Phi, N_m, electrode_m)
     
-    b_Ctx[:sz] =  spsolve(Lap_phi, dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  spsolve(Lap_npm, N_p * computed_lap + N_p_BC + gdgp) #+ adv_p.ravel(order='F')
-    b_Ctx[2*sz:3*sz] =  spsolve(Lap_npm, -N_m * computed_lap + N_m_BC - gdgm) #+ adv_m.ravel(order='F')
+    b_Ctx[:sz] =  -spsolve(Lap_phi, -dl2 * Phi_BC)
+    b_Ctx[sz:2*sz] =  -spsolve(Lap_npm, -N_p * computed_lap - N_p_BC - gdgp) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  -spsolve(Lap_npm, N_m * computed_lap - N_m_BC + gdgm) #+ adv_m.ravel(order='F')
     # b_Ctx[q_i:q_i+Nib] = Q_BC
     # b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     # b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -815,8 +815,8 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G
 
     dl2 = delta_layer**2
 
-    computed_lap = Lap_phi @ Phi
-    #computed_lap = computed_lap - Phi_BC
+    computed_lap = -Lap_phi @ Phi
+    computed_lap = computed_lap + Phi_BC
     
     # alpha_p = 1
     # alpha_m = 1
@@ -848,9 +848,9 @@ def Build_RHS_Schur_System_neumann(ctxt, ctxt_BCs, U, V, Lap_phi, Lap_npm, G_d_G
     # adv_p = alpha_p * (U.reshape((Ny, Nx), order='F') * dNdx_p + V.reshape((Ny, Nx), order='F') * dNdy_p)
     # adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
-    b_Ctx[:sz] =  dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap + N_p_BC - G_d_G_p(Phi, N_p, electrode_p) #+ adv_p.ravel(order='F')
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + N_m_BC + G_d_G_m(Phi, N_m, electrode_m) #+ adv_m.ravel(order='F')
+    b_Ctx[:sz] =  -dl2 * Phi_BC
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap - N_p_BC - G_d_G_p(Phi, N_p, electrode_p) #+ adv_p.ravel(order='F')
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap - N_m_BC + G_d_G_m(Phi, N_m, electrode_m) #+ adv_m.ravel(order='F')
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
@@ -944,11 +944,11 @@ def post_processing_compute_R_neumann(Lap_phi, Lap_npm, p_block, rhs, Nx, Ny, Ni
     rhs_n_p = rhs_2 - Sop_prime(p_p).ravel(order='F')
     rhs_n_m = rhs_3 - Sop_prime(p_m).ravel(order='F')
 
-    n_p = spsolve(Lap_npm, rhs_n_p)
-    n_m = spsolve(Lap_npm, rhs_n_m)
+    n_p = -spsolve(Lap_npm, rhs_n_p)
+    n_m = -spsolve(Lap_npm, rhs_n_m)
 
     rhs_phi = (rhs_1 - 0.5*n_p + 0.5*n_m - Sop_prime(p).ravel(order='F')) / dl2
-    phi = spsolve(Lap_phi, rhs_phi)
+    phi = -spsolve(Lap_phi, rhs_phi)
 
     return np.concatenate((phi, n_p, n_m, p, p_p, p_m))
 

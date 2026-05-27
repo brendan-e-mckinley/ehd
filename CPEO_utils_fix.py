@@ -496,7 +496,7 @@ def apply_Ainv_R(dLap, target_vec, delta_layer):
 
     return [result_vec_1, result_vec_2, result_vec_3]
 
-def Build_RHS_rho_no_particle(ctxt, ctxt_BCs, U, V, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, dx):
+def Build_RHS_rho_no_particle(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -561,12 +561,12 @@ def Build_RHS_rho_no_particle(ctxt, ctxt_BCs, U, V, Lap, dLap, G_d_G_p, G_d_G_m,
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p))
-    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m))
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p, phibc, npbc))
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m, phibc, nmbc))
 
     return b_Ctx
 
-def Build_RHS_rho(ctxt, ctxt_BCs, U, V, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_rho(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -635,15 +635,15 @@ def Build_RHS_rho(ctxt, ctxt_BCs, U, V, Lap, dLap, G_d_G_p, G_d_G_m, delta_layer
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
     b_Ctx[:sz] =  -dLap.solve_A(-dl2 * Phi_BC)
-    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p))
-    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m))
+    b_Ctx[sz:2*sz] =  -dLap.solve_A(-N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p, phibc, npbc))
+    b_Ctx[2*sz:3*sz] =  -dLap.solve_A(N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m, phibc, nmbc))
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     
     return b_Ctx
 
-def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, Lap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
+def Build_RHS_Schur_System(ctxt, ctxt_BCs, phibc, npbc, nmbc, U, V, Lap, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx):
     b_Ctx = np.zeros_like(ctxt_BCs)
     
     sz = Nx * Ny
@@ -712,8 +712,8 @@ def Build_RHS_Schur_System(ctxt, ctxt_BCs, U, V, Lap, G_d_G_p, G_d_G_m, delta_la
     adv_m = alpha_m * (U.reshape((Ny, Nx), order='F') * dNdx_m + V.reshape((Ny, Nx), order='F') * dNdy_m)
 
     b_Ctx[:sz] =  -dl2 * Phi_BC
-    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p)
-    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m)
+    b_Ctx[sz:2*sz] =  -N_p * computed_lap + adv_p.ravel(order='F') - N_p_BC - G_d_G_p(Phi, N_p, phibc, npbc)
+    b_Ctx[2*sz:3*sz] =  N_m * computed_lap + adv_m.ravel(order='F') - N_m_BC + G_d_G_m(Phi, N_m, phibc, nmbc)
     b_Ctx[q_i:q_i+Nib] = Q_BC
     b_Ctx[q_i+Nib:q_i+2*Nib] = Q_p_BC - Jop(N_p.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))
     b_Ctx[q_i+2*Nib:q_i+3*Nib] = Q_m_BC + Jop(N_m.reshape(Ny, Nx, order='F')) * Jop_prime(Phi.reshape(Ny, Nx, order='F'))

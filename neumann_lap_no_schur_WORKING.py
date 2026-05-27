@@ -22,7 +22,7 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 64 # 256; % number of grid points along one direction
+Nx = 256 # 256; % number of grid points along one direction
 L = 2.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -119,10 +119,10 @@ I_ny = eye(Ny)
 Lap_phi = -(kron(I_nx, D2_d_y_phi) + kron(D2_d_x_phi, I_ny))
 
 rhs_phi = np.zeros([Nx, Ny])
-rhs_phi[-1, :] = -beta_BC / dx
+rhs_phi[-1, :] = beta_BC / dx
 print(rhs_phi.ravel(order='F'))
 
-phi_solved = -spsolve(Lap_phi, rhs_phi.ravel(order='F'))
+phi_solved = spsolve(Lap_phi, rhs_phi.ravel(order='F'))
 phi = phi_solved.reshape(Ny,Nx, order='F')
 
 cmap = plt.cm.spring
@@ -159,7 +159,7 @@ rhs_test_npm = np.zeros([Nx, Ny])
 rhs_test_npm[-1, :] = -1 / (dy**2)
 print(rhs_test_npm.ravel(order='F'))
 
-npm_solved = -spsolve(Lap_npm, rhs_test_npm.ravel(order='F'))
+npm_solved = spsolve(Lap_npm, rhs_test_npm.ravel(order='F'))
 npm = npm_solved.reshape(Ny,Nx, order='F')
 
 cmap = plt.cm.spring
@@ -247,11 +247,11 @@ print(residual)
 def Phi_exact(x, y):
     return 0 * x # beta_BC * (y + L/2) + 0 * x
 def Npm_exact(x, y):
-    return 0 * x  + 1.0
+    return 0 * x # + 1.0
 def Np_electrode(phi_1, np_1): #(phi_1, np_0, np_1, np_2):
-    return (np_1) / (1 - phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
+    return np.zeros_like(phi_1)#(np_1) / (1 + phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
 def Nm_electrode(phi_1, nm_1):#(phi_1, nm_0, nm_1, nm_2):
-    return (nm_1) / (1 + phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
+    return np.zeros_like(phi_1)#(nm_1) / (1 - phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
 
 ## Boundary conditions for Rphi = rho system
 Phi_BCs = np.zeros_like(Xint)
@@ -259,10 +259,10 @@ Np_BCs = np.zeros_like(Xint)
 Nm_BCs = np.zeros_like(Xint)
 
 Phi_BCs[-1,:] += (1/dy/dy) * beta_BC * dy
-Np_BCs[0,:] += (1/dy/dy) * Np_electrode(np.zeros_like(xint), np.ones_like(xint))
-Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
-Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(np.zeros_like(xint), np.ones_like(xint))
-Nm_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
+Np_BCs[0,:] -= (1/dy/dy) * Np_electrode(np.zeros_like(xint), np.ones_like(xint))
+Np_BCs[-1,:] -= (1/dy/dy) * np.ones_like(xint)
+Nm_BCs[0,:] -= (1/dy/dy) * Nm_electrode(np.zeros_like(xint), np.ones_like(xint))
+Nm_BCs[-1,:] -= (1/dy/dy) * np.ones_like(xint)
 
 # Boundary conditions context for Schur solve of Rphi = rho 
 ctxt_BCs_Schur = np.concatenate([
@@ -288,8 +288,8 @@ ctxt_BCs = np.concatenate([
 ld = loadmat('neumann_new_lap_no_schur.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
-Ny_ld = 64
-Nx_ld = 64
+Ny_ld = 128
+Nx_ld = 128
 Nib_ld = int(len(ld['xib']))
 sz = Ny_ld * Nx_ld
 
@@ -718,10 +718,10 @@ for t_step in range(N_t):
         Nm_BCs = np.zeros_like(Xint)
 
         Phi_BCs[-1,:] += (1/dy/dy) * beta_BC * dy
-        Np_BCs[0,:] += (1/dy/dy) * Np_electrode(Phi[0,:], Np[0,:])
-        Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
-        Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(Phi[0,:], Nm[0,:])
-        Nm_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
+        Np_BCs[0,:] -= (1/dy/dy) * Np_electrode(Phi[0,:], Np[0,:])
+        Np_BCs[-1,:] -= (1/dy/dy) * np.ones_like(xint)
+        Nm_BCs[0,:] -= (1/dy/dy) * Nm_electrode(Phi[0,:], Nm[0,:])
+        Nm_BCs[-1,:] -= (1/dy/dy) * np.ones_like(xint)
 
         # Boundary conditions context for Schur solve of Rphi = rho 
         ctxt_BCs_Schur = np.concatenate([
