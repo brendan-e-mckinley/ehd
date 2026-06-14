@@ -22,8 +22,8 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 256 # 256; % number of grid points along one direction
-L = 2.0 * np.pi 
+Nx = 512 # 256; % number of grid points along one direction
+L = 4.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
 y = x.copy()
@@ -33,7 +33,7 @@ dy = y[1] - y[0]
 tol = 1e-4
 beta_BC = 50 / L
 sigma_bc = 0.78  # 0.68
-delta_layer = 40*dx #0.1#; %6*dx;
+delta_layer = 15 * dx #0.1#; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
 # Anderson acceleration parameters
@@ -71,12 +71,12 @@ Xint, Yint = np.meshgrid(xint, yint)
 # VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
 ## Immersed boundary
-rad = 0.25
+rad = 1
 dth = dx / rad
 theta = np.arange(0, 2*np.pi - dth, dth)
 Nib = len(theta)
 xib = rad * np.cos(theta) 
-yib = -2 + rad * np.sin(theta) 
+yib = -(2 * np.pi - 2 * delta_layer - rad) + rad * np.sin(theta) #-(np.pi + 2) + 
 n_x = np.cos(theta)
 n_y = np.sin(theta)
 
@@ -256,11 +256,11 @@ def Nm_electrode(phi_1, nm_1):#(phi_1, nm_0, nm_1, nm_2):
     return (nm_1) / (1 - phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('electrode_close_particle.mat')
+ld = loadmat('electrode_close_particle_large_domain_rad_1.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
-Ny_ld = 450
-Nx_ld = 450
+Ny_ld = 512
+Nx_ld = 512
 Nib_ld = int(len(ld['xib']))
 sz = Ny_ld * Nx_ld
 
@@ -373,9 +373,9 @@ Np_BCs = np.zeros_like(Xint)
 Nm_BCs = np.zeros_like(Xint)
 
 Phi_BCs[-1,:] += (1/dy/dy) * beta_BC * dy
-Np_BCs[0,:] += (1/dy/dy) * Np_electrode(Phi_init[0,:], N_p_init[0,:]) #np.zeros_like(xint), np.ones_like(xint))#Phi_init[0,:], N_p_init[0,:]) #np.zeros_like(xint), np.ones_like(xint)
+Np_BCs[0,:] += (1/dy/dy) * Np_electrode(Phi_init[0,:], N_p_init[0,:])#Phi_init[0,:], N_p_init[0,:]) #np.zeros_like(xint), np.ones_like(xint))#Phi_init[0,:], N_p_init[0,:]) #np.zeros_like(xint), np.ones_like(xint)
 Np_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
-Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(Phi_init[0,:], N_m_init[0,:])#Phi_init[0,:], N_m_init[0,:]) #np.zeros_like(xint), np.ones_like(xint)
+Nm_BCs[0,:] += (1/dy/dy) * Nm_electrode(Phi_init[0,:], N_p_init[0,:])#Phi_init[0,:], N_m_init[0,:])#Phi_init[0,:], N_m_init[0,:]) #np.zeros_like(xint), np.ones_like(xint)
 Nm_BCs[-1,:] += (1/dy/dy) * np.ones_like(xint)
 
 # Boundary conditions context for Schur solve of Rphi = rho 
@@ -808,7 +808,7 @@ for t_step in range(N_t):
     # ------------------------------------------------------
     custom_cmap = ListedColormap(plt.cm.get_cmap('cmr.viola', 256)(np.linspace(0.2, 0.8, 256)))
 
-    def plot_field(field, scalars_name, clim, save_path, Xint, Yint, X, Y, radius=0.25):
+    def plot_field(field, scalars_name, clim, save_path, Xint, Yint, X, Y, radius=1):
         """
         Render a 2D scalar field with PyVista (chroma-keyed) and overlay
         matplotlib streamlines, then save to disk.
@@ -828,7 +828,7 @@ for t_step in range(N_t):
             show_scalar_bar=False,
             lighting=False,
         )
-        disk = pv.Disc(center=(0, -2, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100) # -2
+        disk = pv.Disc(center=(0, -(2 * np.pi - 2 * delta_layer - rad), 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100) # -(np.pi + 2)
         plotter.add_mesh(disk, color="gray", show_edges=False)
         plotter.view_xy()
         plotter.camera.tight(padding=0.0)
@@ -884,9 +884,9 @@ for t_step in range(N_t):
     N_net = (Np - Nm) / 2
 
     fields = [
-        (N_net, 'N_net', [-0.5, 0.5], f'img/electrode/n_net/neumann_close.png'),
-        (Np,    'N_p',   [0,  2], f'img/electrode/n_p/neumann_close.png'),
-        (Nm,    'N_m',   [0,  2], f'img/electrode/n_m/neumann_close.png'),
+        (N_net, 'N_net', [-0.5, 0.5], f'img/electrode/n_net/neumann_close_large_domain_rad_1.png'),
+        (Np,    'N_p',   [0,  2], f'img/electrode/n_p/neumann_close_large_domain_rad_1.png'),
+        (Nm,    'N_m',   [0,  2], f'img/electrode/n_m/neumann_close_large_domain_rad_1.png'),
     ]
 
     for field, name, clim, path in fields:
@@ -925,7 +925,7 @@ print(f'New residual Rphi = {residual_check}')
 ###################################
 
 # Save results
-savemat('electrode_close_particle_unresolved.mat', {
+savemat('electrode_close_particle_large_domain_rad_1.mat', {
     'ctxt_Rphi': ctxt,
     'u_next': u_next,
     'Xint': Xint,

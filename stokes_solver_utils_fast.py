@@ -422,21 +422,21 @@ def solve_from_svd(U, Sigma, Vh, rhs):
     return res
 
 # solve the system, assumes Dirichlet boundaries = 0 for x and y dimensions
-def solve(left_bound, right_bound, lu_factorization, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut):
+def solve(left_bound, right_bound, lu_factorization, f_bc, g_bc, h_bc, z_x, z_y, xib, yib, Nib, Nx, tol, cut):
     x = np.linspace(left_bound, right_bound, Nx + 2)
     dx = x[1] - x[0]
     y = x.copy()
     dy = dx
 
-    # IB
-    dth = dx / rad
-    theta = np.arange(0, 2*np.pi - dth, dth)
-    Nib = len(theta)
-    xib = rad * np.cos(theta) 
-    yib = rad * np.sin(theta)
-    # FOR TESTING ONLY
-    # xib = 0.5 + rad * np.cos(theta) 
-    # yib = 0.5 + rad * np.sin(theta)
+    # # IB
+    # dth = dx / rad
+    # theta = np.arange(0, 2*np.pi - dth, dth)
+    # Nib = len(theta)
+    # xib = rad * np.cos(theta) 
+    # yib = rad * np.sin(theta)
+    # # FOR TESTING ONLY
+    # # xib = 0.5 + rad * np.cos(theta) 
+    # # yib = 0.5 + rad * np.sin(theta)
 
     delta_x, delta_y = make_composite_deltas(dx, n=3)
 
@@ -514,21 +514,21 @@ def solve_from_svd(U, Sigma, Vh, rhs):
     return res
 
 # solve the system using a factorized dense Schur complement, assumes Dirichlet boundaries = 0 for x and y dimensions
-def solve_factorized(left_bound, right_bound, lu_factorization, U_schur, Sigma_schur, Vh_schur, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut):
+def solve_factorized(left_bound, right_bound, lu_factorization, U_schur, Sigma_schur, Vh_schur, f_bc, g_bc, h_bc, z_x, z_y, xib, yib, Nib, Nx, tol, cut):
     x = np.linspace(left_bound, right_bound, Nx + 2)
     dx = x[1] - x[0]
     y = x.copy()
     dy = dx
 
-    # IB
-    dth = dx / rad
-    theta = np.arange(0, 2*np.pi - dth, dth)
-    Nib = len(theta)
-    xib = rad * np.cos(theta) 
-    yib = rad * np.sin(theta)
-    # FOR TESTING ONLY
-    # xib = 0.5 + rad * np.cos(theta) 
-    # yib = 0.5 + rad * np.sin(theta)
+    # # IB
+    # dth = dx / rad
+    # theta = np.arange(0, 2*np.pi - dth, dth)
+    # Nib = len(theta)
+    # xib = rad * np.cos(theta) 
+    # yib = rad * np.sin(theta)
+    # # FOR TESTING ONLY
+    # # xib = 0.5 + rad * np.cos(theta) 
+    # # yib = 0.5 + rad * np.sin(theta)
 
     delta_x, delta_y = make_composite_deltas(dx, n=3)
 
