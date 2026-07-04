@@ -45,18 +45,16 @@ X, Y = np.meshgrid(x, y)
 Xint, Yint = np.meshgrid(xint, yint)
 
 ## Staggered grid (horizontal faces for V, vertical faces for U, cell centers for P)
-N_U = Nx * (Ny + 1)
-N_V = (Nx + 1) * Ny
+N_U = (Nx + 2) * (Ny + 1)
+N_V = (Nx + 1) * (Ny + 2)
 N_P = (Nx + 1) * (Ny + 1)
-x_trunc = x[1:-1]    # length Nx
-y_trunc = y[1:-1]    # length Ny
 x_mid = x + dx / 2
 y_mid = y + dy / 2
 x_offset = x_mid[:-1]
 y_offset = y_mid[:-1]
 
-UGridX, UGridY = np.meshgrid(x_trunc, y_offset) # UGridX, UGridY
-VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
+UGridX, UGridY = np.meshgrid(x, y_offset) # UGridX, UGridY
+VGridX, VGridY = np.meshgrid(x_offset, y)
 
 #########################
 ######  OPERATORS  ######
@@ -64,24 +62,69 @@ VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 
 # first, test just the laplacian operators for U and V. 
 
-# 1d do-nothing in x (u)
+# do-nothing in y (north), zero neumman in x (V)
 
-e_x_U = np.ones(Nx)
-e_y_U = np.ones(Ny+1)
-D2_x_U = diags([e_x_U, -2*e_x_U, e_x_U], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
+e_x_V = np.ones(Nx + 1)
+e_y_V = np.ones(Ny + 2)
+D2_y_V = diags([e_y_V, -2*e_y_V, e_y_V], offsets=[-1, 0, 1], shape=(Ny + 2, Ny + 2), format='lil')
+# this is what we'll actually do with the divergence-free thing
+# D2_y_V[-1, -2] = 2.0
+D2_y_V[0, 1] = 0
+print(D2_y_V.toarray())
+D2_y_V = (D2_y_V / dy2).tocsr() #/ dy2
+
+D2_x_V = diags([e_x_V, -2*e_x_V, e_x_V], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
+D2_x_V[0, 0] = -1.0
+D2_x_V[-1, -1] = -1.0
+D2_x_V = (D2_x_V / dx2).tocsr() #/ dx2
+
+Lap_V = kron(eye(Nx + 1, format='csr'), D2_y_V, format='csr') + kron(D2_x_V, eye(Ny + 2, format='csr'), format='csr')
+
+print(Lap_V.toarray())
+
+# test with manufactured solution
+def V_func(x, y):
+    return np.sin(2 * x - np.pi / 2) * np.sin(y)
+def Lap_V_func(x, y):
+    return -5 * np.sin(2 * x - np.pi / 2) * np.sin(y)
+
+V_manufactured = V_func(VGridX, VGridY)
+Lap_V_manufactured = Lap_V_func(VGridX, VGridY)
+
+# compute ghost (forcing) values
+g_bc = np.zeros_like(V_manufactured)
+g_bc[-1, :] = -V_func(x_offset, L + dy) / dy2
+#print(f_bc.ravel().T)
+
+# solve
+res = spsolve(Lap_V, Lap_V_manufactured.ravel(order='F') + g_bc.ravel(order='F'))
+
+V_sol = res.reshape(Ny + 2, Nx + 1, order='F')
+
+# solved values for the south boundary are garbage, we know they're equal to 0
+V_sol[0, :] = 0
+
+err = np.linalg.norm(V_sol - V_manufactured) / np.linalg.norm(V_manufactured)
+
+print(f'error = {err}')
+
+# do-nothing in x, zero neumann in y (north) (U)
+
+e_x_U = np.ones(Nx + 2)
+e_y_U = np.ones(Ny + 1)
+D2_x_U = diags([e_x_U, -2*e_x_U, e_x_U], offsets=[-1, 0, 1], shape=(Nx + 2, Nx + 2), format='lil')
 # this is what we'll actually do with the divergence-free thing
 # D2_x_U[0, 1] = 2.0
 # D2_x_U[-1, -2] = 2.0
 print(D2_x_U.toarray())
 D2_x_U = (D2_x_U / dx2).tocsr() #/ dx2
 
-D2_y_U = diags([e_y_U, -2*e_y_U, e_y_U], offsets=[-1, 0, 1], shape=(Ny+1, Ny+1), format='lil')
+D2_y_U = diags([e_y_U, -2*e_y_U, e_y_U], offsets=[-1, 0, 1], shape=(Ny + 1, Ny + 1), format='lil')
 D2_y_U[0, 0] = -3.0
 D2_y_U[-1, -1] = -1.0
 D2_y_U = (D2_y_U / dy2).tocsr() #/ dy2
 
-#Lap_U = kron(eye(Nx + 1, format='csr'), D2_y_U, format='csr') + kron(D2_x_U, eye(Nx, format='csr'), format='csr')
-Lap_U = kron(eye(Ny, format='csr'), D2_y_U, format='csr') + kron(D2_x_U, eye(Nx+1, format='csr'), format='csr')
+Lap_U = kron(eye(Nx + 2, format='csr'), D2_y_U, format='csr') + kron(D2_x_U, eye(Ny + 1, format='csr'), format='csr')
 
 print(Lap_U.toarray())
 
@@ -103,7 +146,7 @@ f_bc[:, -1] = -U_func(L + dx, y_offset) / dx2
 # solve
 res = spsolve(Lap_U, Lap_U_manufactured.ravel(order='F') + f_bc.ravel(order='F'))
 
-U_sol = res.reshape(Nx + 1, Ny, order='F')
+U_sol = res.reshape(Ny + 1, Nx + 2, order='F')
 
 err = np.linalg.norm(U_sol - U_manufactured) / np.linalg.norm(U_manufactured)
 
