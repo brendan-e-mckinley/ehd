@@ -22,7 +22,7 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 512 # 256; % number of grid points along one direction
+Nx = 128 # 256; % number of grid points along one direction
 L = np.pi / 2
 x = np.linspace(0, L, Nx+2) 
 y = x.copy()
@@ -55,12 +55,13 @@ y_offset = y_mid[:-1]
 
 UGridX, UGridY = np.meshgrid(x, y_offset) # UGridX, UGridY
 VGridX, VGridY = np.meshgrid(x_offset, y)
+PGridX, PGridY = np.meshgrid(x_offset, y_offset)
 
 #########################
 ######  OPERATORS  ######
 #########################
 
-# first, test just the laplacian operators for U and V. 
+## first, test just the laplacian operators for U and V. 
 
 # do-nothing in y (north), zero neumman in x (V)
 
@@ -70,7 +71,7 @@ D2_y_V = diags([e_y_V, -2*e_y_V, e_y_V], offsets=[-1, 0, 1], shape=(Ny + 2, Ny +
 # this is what we'll actually do with the divergence-free thing
 # D2_y_V[-1, -2] = 2.0
 D2_y_V[0, 1] = 0
-print(D2_y_V.toarray())
+# print(D2_y_V.toarray())
 D2_y_V = (D2_y_V / dy2).tocsr() #/ dy2
 
 D2_x_V = diags([e_x_V, -2*e_x_V, e_x_V], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
@@ -80,7 +81,7 @@ D2_x_V = (D2_x_V / dx2).tocsr() #/ dx2
 
 Lap_V = kron(eye(Nx + 1, format='csr'), D2_y_V, format='csr') + kron(D2_x_V, eye(Ny + 2, format='csr'), format='csr')
 
-print(Lap_V.toarray())
+#print(Lap_V.toarray())
 
 # test with manufactured solution
 def V_func(x, y):
@@ -116,7 +117,7 @@ D2_x_U = diags([e_x_U, -2*e_x_U, e_x_U], offsets=[-1, 0, 1], shape=(Nx + 2, Nx +
 # this is what we'll actually do with the divergence-free thing
 # D2_x_U[0, 1] = 2.0
 # D2_x_U[-1, -2] = 2.0
-print(D2_x_U.toarray())
+# print(D2_x_U.toarray())
 D2_x_U = (D2_x_U / dx2).tocsr() #/ dx2
 
 D2_y_U = diags([e_y_U, -2*e_y_U, e_y_U], offsets=[-1, 0, 1], shape=(Ny + 1, Ny + 1), format='lil')
@@ -126,7 +127,7 @@ D2_y_U = (D2_y_U / dy2).tocsr() #/ dy2
 
 Lap_U = kron(eye(Nx + 2, format='csr'), D2_y_U, format='csr') + kron(D2_x_U, eye(Ny + 1, format='csr'), format='csr')
 
-print(Lap_U.toarray())
+# print(Lap_U.toarray())
 
 # test with manufactured solution
 def U_func(x, y):
@@ -151,6 +152,63 @@ U_sol = res.reshape(Ny + 1, Nx + 2, order='F')
 err = np.linalg.norm(U_sol - U_manufactured) / np.linalg.norm(U_manufactured)
 
 print(f'error = {err}')
+
+# next, test the grad operators for pi
+
+e_x_P = np.ones(Nx + 1)
+e_y_P = np.ones(Ny + 1)
+D2_x_P = diags([-e_x_P, e_x_P], offsets=[0, 1], shape=(Nx + 1, Nx + 2), format='lil')
+D2_x_P[0, 0] = -2.0
+D2_x_P[-1, -1] = 2.0
+# print(D2_x_P.toarray())
+D2_x_P = (D2_x_P / dx).tocsr() # / dx
+
+D_x = kron(D2_x_P, eye(Nx + 1, format='csr'), format='csr')
+# print(D_x.toarray())
+
+e_y_P = np.ones(Nx + 1)
+e_y_P = np.ones(Ny + 1)
+D2_y_P = diags([-e_y_P, e_y_P], offsets=[0, 1], shape=(Ny + 1, Ny + 2), format='lil')
+D2_y_P[0, 0] = 0.0
+D2_y_P[-1, -1] = 2.0
+# print(D2_y_P.toarray())
+D2_y_P = (D2_y_P / dy).tocsr() #/ 2 * dy
+
+D_y = kron(eye(Ny + 1, format='csr'), D2_y_P, format='csr')
+# print(D_y.toarray())
+
+# Gradients are exact adjoints (negative transposes)
+G_x = (-D_x.transpose()).tocsr()
+G_y = (-D_y.transpose()).tocsr()
+
+# test with manufactured solution
+def P_func(x, y):
+    return np.sin(2 * x) * np.cos(y)
+def Grad_x_P_func(x, y):
+    return 2 * np.cos(2 * x) * np.cos(y)
+def Grad_y_P_func(x, y):
+    return - np.sin(2 * x) * np.sin(y)
+
+P_manufactured = P_func(PGridX, PGridY)
+Grad_x_P_manufactured = Grad_x_P_func(UGridX, UGridY)
+Grad_y_P_manufactured = Grad_y_P_func(VGridX, VGridY)
+
+# compute ghost (forcing) values
+h_x_bc = np.zeros_like(Grad_x_P_manufactured)
+f_bc[:, 0]  = -U_func(-dx, y_offset) / dx2
+f_bc[:, -1] = -U_func(L + dx, y_offset) / dx2
+h_y_bc = np.zeros_like(Grad_y_P_manufactured)
+#print(f_bc.ravel().T)
+
+# test
+G_x_p = (G_x @ P_manufactured.ravel(order='F')).reshape(Ny + 1, Nx + 2, order='F')
+G_y_p = (G_y @ P_manufactured.ravel(order='F')).reshape(Ny + 2, Nx + 1, order='F')
+
+err_x = np.linalg.norm(G_x_p - Grad_x_P_manufactured) / np.linalg.norm(Grad_x_P_manufactured)
+err_y = np.linalg.norm(G_y_p - Grad_y_P_manufactured) / np.linalg.norm(Grad_y_P_manufactured)
+
+print(err_x)
+print(err_y)
 
 # def build_staggered_Laps(Nx, dx):
 #     dx2 = dx**2
