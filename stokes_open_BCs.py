@@ -22,9 +22,9 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 128 # 256; % number of grid points along one direction
-L = np.pi / 2
-x = np.linspace(0, L, Nx+2) 
+Nx = 256 # 256; % number of grid points along one direction
+L = 1
+x = np.linspace(-L, L, Nx+2) 
 y = x.copy()
 dx = x[1] - x[0]
 dy = y[1] - y[0]
@@ -69,8 +69,9 @@ e_x_V = np.ones(Nx + 1)
 e_y_V = np.ones(Ny + 2)
 D2_y_V = diags([e_y_V, -2*e_y_V, e_y_V], offsets=[-1, 0, 1], shape=(Ny + 2, Ny + 2), format='lil')
 # this is what we'll actually do with the divergence-free thing
-# D2_y_V[-1, -2] = 2.0
-D2_y_V[0, 1] = 0
+D2_y_V[-1, -2] = 2.0
+# D2_y_V[-2, -1] = 2.0
+D2_y_V[0, 1] = 0.0
 # print(D2_y_V.toarray())
 D2_y_V = (D2_y_V / dy2).tocsr() #/ dy2
 
@@ -81,16 +82,19 @@ D2_x_V = (D2_x_V / dx2).tocsr() #/ dx2
 
 Lap_V = kron(eye(Nx + 1, format='csr'), D2_y_V, format='csr') + kron(D2_x_V, eye(Ny + 2, format='csr'), format='csr')
 
-#print(Lap_V.toarray())
+print(Lap_V.toarray())
 
 # test with manufactured solution
 def V_func(x, y):
-    return np.sin(2 * x - np.pi / 2) * np.sin(y)
+    return (x**3 / 3 - x) * ((1 / 4) * (y + 1)**3 * (y - 3))
 def Lap_V_func(x, y):
-    return -5 * np.sin(2 * x - np.pi / 2) * np.sin(y)
+    return (2 * x) * ((1 / 4) * (y + 1)**3 * (y - 3)) + (x**3 / 3 - x) * (2 * (y + 1) * (y - 2) + (y + 1)**2)
+def Div_V_y_func(x, y):
+    return (x**3 / 3 - x) * (y + 1) ** 2 * (y - 2)
 
 V_manufactured = V_func(VGridX, VGridY)
 Lap_V_manufactured = Lap_V_func(VGridX, VGridY)
+Div_V_manufactured = Div_V_y_func(PGridX, PGridY)
 
 # compute ghost (forcing) values
 g_bc = np.zeros_like(V_manufactured)
@@ -115,8 +119,10 @@ e_x_U = np.ones(Nx + 2)
 e_y_U = np.ones(Ny + 1)
 D2_x_U = diags([e_x_U, -2*e_x_U, e_x_U], offsets=[-1, 0, 1], shape=(Nx + 2, Nx + 2), format='lil')
 # this is what we'll actually do with the divergence-free thing
-# D2_x_U[0, 1] = 2.0
-# D2_x_U[-1, -2] = 2.0
+D2_x_U[0, 1] = 2.0
+D2_x_U[-1, -2] = 2.0
+# D2_x_U[1, 0] = 2.0
+# D2_x_U[-2, -1] = 2.0
 # print(D2_x_U.toarray())
 D2_x_U = (D2_x_U / dx2).tocsr() #/ dx2
 
@@ -131,12 +137,15 @@ Lap_U = kron(eye(Nx + 2, format='csr'), D2_y_U, format='csr') + kron(D2_x_U, eye
 
 # test with manufactured solution
 def U_func(x, y):
-    return np.cos(x) * np.sin(y)
+    return (x**4 / 12 - x**2 / 2) * (y + 1)**2 * (y - 2)
 def Lap_U_func(x, y):
-    return -2 * np.cos(x) * np.sin(y)
+    return (x**2 - 1) * (y + 1)**2 * (y - 2) + (x**4 / 12 - x**2 / 2) * (6 * y)
+def Div_U_x_func(x, y):
+    return (x**3 / 3 - x) * (y + 1)**2 * (y - 2)
 
 U_manufactured = U_func(UGridX, UGridY)
 Lap_U_manufactured = Lap_U_func(UGridX, UGridY)
+Div_U_manufactured = Div_U_x_func(PGridX, PGridY)
 
 # compute ghost (forcing) values
 f_bc = np.zeros_like(U_manufactured)
@@ -181,13 +190,31 @@ D_y = kron(eye(Ny + 1, format='csr'), D2_y_P, format='csr')
 G_x = (-D_x.transpose()).tocsr()
 G_y = (-D_y.transpose()).tocsr()
 
+# different divergence operators? 
+e_x_P = np.ones(Nx + 1)
+e_y_P = np.ones(Ny + 1)
+D2_x_P = diags([-e_x_P, e_x_P], offsets=[0, 1], shape=(Nx + 1, Nx + 2), format='lil')
+D2_x_P = (D2_x_P / dx).tocsr() # / dx
+
+D_x = kron(D2_x_P, eye(Nx + 1, format='csr'), format='csr')
+
+e_y_P = np.ones(Nx + 1)
+e_y_P = np.ones(Ny + 1)
+D2_y_P = diags([-e_y_P, e_y_P], offsets=[0, 1], shape=(Ny + 1, Ny + 2), format='lil')
+D2_y_P = (D2_y_P / dy).tocsr() #/ 2 * dy
+
+D_y = kron(eye(Ny + 1, format='csr'), D2_y_P, format='csr')
+
+print(G_x.toarray())
+print(G_y.toarray())
+
 # test with manufactured solution
 def P_func(x, y):
-    return np.sin(2 * x) * np.cos(y)
+    return (x ** 3 / 3 - x) * (y + 1)**2 * (y - 2)
 def Grad_x_P_func(x, y):
-    return 2 * np.cos(2 * x) * np.cos(y)
+    return (x ** 2 - 1) * (y + 1)**2 * (y - 2)
 def Grad_y_P_func(x, y):
-    return - np.sin(2 * x) * np.sin(y)
+    return (x ** 3 / 3 - x) * (2 * (y + 1) * (y - 2) + (y + 1) ** 2)
 
 P_manufactured = P_func(PGridX, PGridY)
 Grad_x_P_manufactured = Grad_x_P_func(UGridX, UGridY)
@@ -195,10 +222,10 @@ Grad_y_P_manufactured = Grad_y_P_func(VGridX, VGridY)
 
 # compute ghost (forcing) values
 h_x_bc = np.zeros_like(Grad_x_P_manufactured)
-f_bc[:, 0]  = -U_func(-dx, y_offset) / dx2
-f_bc[:, -1] = -U_func(L + dx, y_offset) / dx2
+h_x_bc[:, 0]  = U_func(-dx, y_offset) / dx2
+h_x_bc[:, -1] = U_func(L + dx, y_offset) / dx2
 h_y_bc = np.zeros_like(Grad_y_P_manufactured)
-#print(f_bc.ravel().T)
+h_y_bc[-1, :] = -V_func(x_offset, L + dy) / dy2
 
 # test
 G_x_p = (G_x @ P_manufactured.ravel(order='F')).reshape(Ny + 1, Nx + 2, order='F')
@@ -210,57 +237,53 @@ err_y = np.linalg.norm(G_y_p - Grad_y_P_manufactured) / np.linalg.norm(Grad_y_P_
 print(err_x)
 print(err_y)
 
-# def build_staggered_Laps(Nx, dx):
-#     dx2 = dx**2
+## Prefactor big Stokes operator
+Z_UV = csr_matrix((N_U, N_V))
+Z_VU = csr_matrix((N_V, N_U))
+Z_PP = csr_matrix((N_P, N_P))
 
-#     # 1-D operators (Dirichlet in x, Dirichlet in y via zero ghosts)
-#     # assumes Nx = Ny
-#     e_x = np.ones(Nx + 1)
-#     e_y = np.ones(Nx)
-#     D2_p = diags([e_p, -2*e_p, e_p], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
-#     D2_p[0, 0] = -3.0
-#     D2_p[-1, -1] = -3.0
-#     D2_p = (D2_p / dx2).tocsr()
+# Saddle point system
+big_L = bmat([
+    [Lap_U, Z_VU,  -G_x],
+    [Z_UV,  Lap_V, -G_y],
+    [D_x,   D_y,   Z_PP] 
+], format='csr')
 
-#     D2 = diags([e, -2*e, e], offsets=[-1, 0, 1], shape=(Nx, Nx), format='lil')
-#     D2 = (D2 / dx2).tocsr()
+stokes_LU = splu(big_L)
+rhs_U = Lap_U_manufactured.ravel(order='F') - Grad_x_P_manufactured.ravel(order='F') #+ f_bc.ravel(order='F') + h_x_bc.ravel(order='F')
+rhs_V = Lap_V_manufactured.ravel(order='F') - Grad_y_P_manufactured.ravel(order='F') #+ g_bc.ravel(order='F') + h_y_bc.ravel(order='F')
+rhs_P = Div_U_manufactured.ravel(order='F') + Div_V_manufactured.ravel(order='F')
 
-#     Lap_U = kron(D2, eye(Nx + 1, format='csr'), format='csr') + kron(eye(Nx, format='csr'), D2_p, format='csr')
-#     Lap_V = kron(D2_p, eye(Nx, format='csr'), format='csr') + kron(eye(Nx + 1, format='csr'), D2, format='csr')
+res = stokes_LU.solve(np.concatenate([rhs_U, rhs_V, rhs_P]))
 
-#     return Lap_U, Lap_V
+U_solved, V_solved, P_solved = res[:N_U], res[N_U:N_U+N_V], res[N_U+N_V:]
+V_sol[0, :] = 0
 
-# ## Laplacian operators
-# Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
+err_U = np.linalg.norm(U_solved - U_manufactured.ravel(order='F')) / np.linalg.norm(U_manufactured.ravel(order='F'))
+err_V = np.linalg.norm(V_solved - V_manufactured.ravel(order='F')) / np.linalg.norm(V_manufactured.ravel(order='F'))
+err_P = np.linalg.norm(P_solved - P_manufactured.ravel(order='F')) / np.linalg.norm(P_manufactured.ravel(order='F'))
 
-# D_x_1d = diags(
-#     [-0.5/dx * np.ones(Nx+2), 0.5/dx * np.ones(Nx+2)],
-#     offsets=[-1, 1],
-#     shape=(Nx+2, Nx+2)
-# ).tocsr()[1:-1, :]
+print('Error U: ', err_U)
+print('Error V: ', err_V)
+print('Error P: ', err_P)
 
-# D_y_1d = diags(
-#     [-0.5/dy * np.ones(Ny+2), 0.5/dy * np.ones(Ny+2)],
-#     offsets=[-1, 1],
-#     shape=(Ny+2, Ny+2)
-# ).tocsr()[1:-1, :]
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(VGridX, VGridY, V_solved.reshape(Ny + 2, Nx + 1, order='F'), cmap=cmap, edgecolor='none')
+ax.set_title("V solved")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# G_x_full = kron(D_x_1d, eye(Ny+2, format='csr'), format='csr')
-# G_y_full = kron(eye(Nx+2, format='csr'), D_y_1d, format='csr')
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(VGridX, VGridY, V_manufactured, cmap=cmap, edgecolor='none')
+ax.set_title("V manufactured")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# # Staggered gradient and divergence operators
-# G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(VGridX, VGridY, V_solved.reshape(Ny + 2, Nx + 1, order='F') - V_manufactured, cmap=cmap, edgecolor='none')
+ax.set_title("V error")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# ## Prefactor big Stokes operator
-# Z_UV = csr_matrix((N_U, N_V))
-# Z_VU = csr_matrix((N_V, N_U))
-# Z_PP = csr_matrix((N_P, N_P))
-
-# # Saddle point system
-# big_L = bmat([
-#     [Lap_U, Z_VU,  -G_x_staggered],
-#     [Z_UV,  Lap_V, -G_y_staggered],
-#     [D_x_staggered,   D_y_staggered,   Z_PP] 
-# ], format='csr')
-
-# stokes_LU = splu(big_L)
+plt.show()
