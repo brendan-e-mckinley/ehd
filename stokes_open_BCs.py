@@ -16,13 +16,14 @@ from scipy.interpolate import Akima1DInterpolator, interpn
 import CPEO_utils_neumann as cpeo
 import stokes_solver_utils_fast_K as stokes
 from matplotlib.colors import ListedColormap, Normalize
+import stokes_solver_utils_open_BCs as stokes
 
 ###########################
 ######  PARAMETERS  #######
 ###########################
 
 ## Grid parameters
-Nx = 256 # 256; % number of grid points along one direction
+Nx = 512 # 256; % number of grid points along one direction
 L = 1
 x = np.linspace(-L, L, Nx+2) 
 y = x.copy()
@@ -63,26 +64,9 @@ PGridX, PGridY = np.meshgrid(x_offset, y_offset)
 
 ## first, test just the laplacian operators for U and V. 
 
+Lap_U, Lap_V = stokes.build_staggered_Laps_do_nothing(Nx, Ny, dx, dy)
+
 # do-nothing in y (north), zero neumman in x (V)
-
-e_x_V = np.ones(Nx + 1)
-e_y_V = np.ones(Ny + 2)
-D2_y_V = diags([e_y_V, -2*e_y_V, e_y_V], offsets=[-1, 0, 1], shape=(Ny + 2, Ny + 2), format='lil')
-# this is what we'll actually do with the divergence-free thing
-D2_y_V[-1, -2] = 2.0
-# D2_y_V[-2, -1] = 2.0
-D2_y_V[0, 1] = 0.0
-# print(D2_y_V.toarray())
-D2_y_V = (D2_y_V / dy2).tocsr() #/ dy2
-
-D2_x_V = diags([e_x_V, -2*e_x_V, e_x_V], offsets=[-1, 0, 1], shape=(Nx + 1, Nx + 1), format='lil')
-D2_x_V[0, 0] = -1.0
-D2_x_V[-1, -1] = -1.0
-D2_x_V = (D2_x_V / dx2).tocsr() #/ dx2
-
-Lap_V = kron(eye(Nx + 1, format='csr'), D2_y_V, format='csr') + kron(D2_x_V, eye(Ny + 2, format='csr'), format='csr')
-
-print(Lap_V.toarray())
 
 # test with manufactured solution
 def V_func(x, y):
@@ -115,26 +99,6 @@ print(f'error = {err}')
 
 # do-nothing in x, zero neumann in y (north) (U)
 
-e_x_U = np.ones(Nx + 2)
-e_y_U = np.ones(Ny + 1)
-D2_x_U = diags([e_x_U, -2*e_x_U, e_x_U], offsets=[-1, 0, 1], shape=(Nx + 2, Nx + 2), format='lil')
-# this is what we'll actually do with the divergence-free thing
-D2_x_U[0, 1] = 2.0
-D2_x_U[-1, -2] = 2.0
-# D2_x_U[1, 0] = 2.0
-# D2_x_U[-2, -1] = 2.0
-# print(D2_x_U.toarray())
-D2_x_U = (D2_x_U / dx2).tocsr() #/ dx2
-
-D2_y_U = diags([e_y_U, -2*e_y_U, e_y_U], offsets=[-1, 0, 1], shape=(Ny + 1, Ny + 1), format='lil')
-D2_y_U[0, 0] = -3.0
-D2_y_U[-1, -1] = -1.0
-D2_y_U = (D2_y_U / dy2).tocsr() #/ dy2
-
-Lap_U = kron(eye(Nx + 2, format='csr'), D2_y_U, format='csr') + kron(D2_x_U, eye(Ny + 1, format='csr'), format='csr')
-
-# print(Lap_U.toarray())
-
 # test with manufactured solution
 def U_func(x, y):
     return (x**4 / 12 - x**2 / 2) * (y + 1)**2 * (y - 2)
@@ -164,49 +128,7 @@ print(f'error = {err}')
 
 # next, test the grad operators for pi
 
-e_x_P = np.ones(Nx + 1)
-e_y_P = np.ones(Ny + 1)
-D2_x_P = diags([-e_x_P, e_x_P], offsets=[0, 1], shape=(Nx + 1, Nx + 2), format='lil')
-D2_x_P[0, 0] = -2.0
-D2_x_P[-1, -1] = 2.0
-# print(D2_x_P.toarray())
-D2_x_P = (D2_x_P / dx).tocsr() # / dx
-
-D_x = kron(D2_x_P, eye(Nx + 1, format='csr'), format='csr')
-# print(D_x.toarray())
-
-e_y_P = np.ones(Nx + 1)
-e_y_P = np.ones(Ny + 1)
-D2_y_P = diags([-e_y_P, e_y_P], offsets=[0, 1], shape=(Ny + 1, Ny + 2), format='lil')
-D2_y_P[0, 0] = 0.0
-D2_y_P[-1, -1] = 2.0
-# print(D2_y_P.toarray())
-D2_y_P = (D2_y_P / dy).tocsr() #/ 2 * dy
-
-D_y = kron(eye(Ny + 1, format='csr'), D2_y_P, format='csr')
-# print(D_y.toarray())
-
-# Gradients are exact adjoints (negative transposes)
-G_x = (-D_x.transpose()).tocsr()
-G_y = (-D_y.transpose()).tocsr()
-
-# different divergence operators? 
-e_x_P = np.ones(Nx + 1)
-e_y_P = np.ones(Ny + 1)
-D2_x_P = diags([-e_x_P, e_x_P], offsets=[0, 1], shape=(Nx + 1, Nx + 2), format='lil')
-D2_x_P = (D2_x_P / dx).tocsr() # / dx
-
-D_x = kron(D2_x_P, eye(Nx + 1, format='csr'), format='csr')
-
-e_y_P = np.ones(Nx + 1)
-e_y_P = np.ones(Ny + 1)
-D2_y_P = diags([-e_y_P, e_y_P], offsets=[0, 1], shape=(Ny + 1, Ny + 2), format='lil')
-D2_y_P = (D2_y_P / dy).tocsr() #/ 2 * dy
-
-D_y = kron(eye(Ny + 1, format='csr'), D2_y_P, format='csr')
-
-print(G_x.toarray())
-print(G_y.toarray())
+G_x, G_y, D_x, D_y = stokes.build_staggered_Grads_Divs_do_nothing(Nx, Ny, dx, dy)
 
 # test with manufactured solution
 def P_func(x, y):

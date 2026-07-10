@@ -8,12 +8,12 @@ import matplotlib.patches as patches
 import time
 from numba import jit
 from sksparse.cholmod import cholesky
-from scipy.sparse import spdiags, eye, kron, diags, csr_matrix, bmat, lil_matrix
+from scipy.sparse import spdiags, eye, kron, diags, csr_matrix, bmat, lil_matrix, coo_matrix
 from scipy.sparse.linalg import splu, eigs, spsolve, gmres, LinearOperator
 from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
-import CPEO_utils_neumann as cpeo
+import CPEO_utils_open_BCs as cpeo
 import stokes_solver_utils_open_BCs as stokes
 from matplotlib.colors import ListedColormap, Normalize
 
@@ -31,9 +31,9 @@ dy = y[1] - y[0]
 
 ## Miscellaneous parameters
 tol = 1e-4
-beta_BC = 50 / L
-sigma_bc = 0.68  # 0.68
-delta_layer = 10 * dx #0.1#; %6*dx;
+beta_BC = 10 / L
+sigma_bc = 0.05  # 0.68
+delta_layer = 40 * dx #0.1#; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
 
 # Anderson acceleration parameters
@@ -57,18 +57,17 @@ X, Y = np.meshgrid(x, y)
 Xint, Yint = np.meshgrid(xint, yint)
 
 ## Staggered grid (horizontal faces for V, vertical faces for U, cell centers for P)
-N_U = Nx * (Ny + 1)
-N_V = (Nx + 1) * Ny
+N_U = (Nx + 2) * (Ny + 1)
+N_V = (Nx + 1) * (Ny + 2)
 N_P = (Nx + 1) * (Ny + 1)
-x_trunc = x[1:-1]    # length Nx
-y_trunc = y[1:-1]    # length Ny
 x_mid = x + dx / 2
 y_mid = y + dy / 2
 x_offset = x_mid[:-1]
 y_offset = y_mid[:-1]
 
-UGridX, UGridY = np.meshgrid(x_trunc, y_offset)
-VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
+UGridX, UGridY = np.meshgrid(x, y_offset) # UGridX, UGridY
+VGridX, VGridY = np.meshgrid(x_offset, y)
+PGridX, PGridY = np.meshgrid(x_offset, y_offset)
 
 # ## Immersed boundary
 # rad = 1
@@ -85,7 +84,7 @@ VGridX, VGridY = np.meshgrid(x_offset, y_trunc)
 ## Immersed boundary
 rad = 1
 particle_x_offset = 0
-particle_y_offset = 2 * np.pi - 10 * delta_layer - rad
+particle_y_offset = 4 * np.pi - 8 * delta_layer - rad
 
 dth_approx = dx / rad
 Nib = int(round(2 * np.pi / dth_approx))
@@ -110,19 +109,11 @@ print(np.max(diffs))
 ######  OPERATORS  ######
 #########################
 
-## Laplacian operators
+## Fluid Laplacian operators
 # Staggered laplacians (dirichlet boundary conditions in y, dirichlet boundary conditions in x)
-Lap_U, Lap_V = stokes.build_staggered_Laps(Nx, dx)
+Lap_U, Lap_V = stokes.build_staggered_Laps_do_nothing(Nx, Ny, dx, dy)
 
-# # Nodal laplacian (dirichlet boundary conditions in y, periodic in x)
-# e = (1/dy**2) * np.ones(Ny)
-# D2_d = spdiags([e, -2*e, e], [-1, 0, 1], Ny, Ny)
-# I_nx = eye(Nx)
-# I_ny = eye(Ny)
-# Lap = -(kron(I_nx, D2_d) + kron(D2_d, I_ny))
-# dLap = cholesky(Lap) # Cholesky decomposition
-
-## LAPLACIANS W/ NEUMANN CONDITIONS
+## ELECTROSTATIC LAPLACIANS W/ NEUMANN CONDITIONS
 
 # Phi laplacian: Neumann conditions
 e_y = (1/dy**2) * np.ones(Ny)
@@ -203,70 +194,30 @@ computed_rhs = Lap_npm @ npm.ravel(order='F')
 residual = computed_rhs - rhs_test_npm.ravel(order='F')
 print(residual)
 
-# ## Gradient/divergence operators
-# def periodic_centered_diff_x(Nx, dx):
-#     e = np.ones(Nx)
-#     D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Nx, Nx), format='lil') / dx
-#     D[0, -1] = -0.5/dx     # wrap: f_{i-1} at i=0 -> f_{N-1}
-#     D[-1, 0] = 0.5/dx      # wrap: f_{i+1} at i=N-1 -> f_{0}
-#     return D.tocsr()
-
-# def centered_diff_y(Ny, dy):
-#     e = np.ones(Ny)
-#     D = diags([-0.5*e, 0.5*e], offsets=[-1, 1], shape=(Ny, Ny), format='lil') / dy
-#     return D.tocsr()
-
-# # Full gradient operators ((Nx + 2) * (Ny + 2)) including boundaries
-# D_x_full = diags(
-#     [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
-#     offsets=[-1, 1],
-#     shape=(Nx, Nx + 2)
-# ).tocsr()
-# D_y_full = diags(
-#     [-0.5/dy * np.ones(Ny),  0.5/dy * np.ones(Ny)],
-#     offsets=[-1,  1],
-#     shape=(Ny, Ny + 2),
-#     format='csr'
-# )
-# G_x_full = kron(D_x_full, eye(Ny + 2, format='csr'), format='csr')
-# G_y_full = kron(eye(Nx + 2, format='csr'), D_y_full,format='csr')
-
 D_x_1d = diags(
     [-0.5/dx * np.ones(Nx+2), 0.5/dx * np.ones(Nx+2)],
     offsets=[-1, 1],
     shape=(Nx+2, Nx+2)
-).tocsr()[1:-1, :]
+).tocsr()#[1:-1, :]
 
 D_y_1d = diags(
     [-0.5/dy * np.ones(Ny+2), 0.5/dy * np.ones(Ny+2)],
     offsets=[-1, 1],
     shape=(Ny+2, Ny+2)
-).tocsr()[1:-1, :]
+).tocsr()#[1:-1, :]
+# D_y_1d[0, 0] = -D_y_1d[0, 0] * 2 # Dirichlet = 0
 
 G_x_full = kron(D_x_1d, eye(Ny+2, format='csr'), format='csr')
 G_y_full = kron(eye(Nx+2, format='csr'), D_y_1d, format='csr')
 
-# # Nodal gradient operators (internal points only, excludes boundaries)
-# D_x_nodes = diags(
-#     [-0.5/dx * np.ones(Nx), 0.5/dx * np.ones(Nx)],
-#     offsets=[-1, 1],
-#     shape=(Nx, Nx + 2),
-#     format='csr'
-# )
+G_x_U = kron(D_x_1d[1:-1, :], eye(Ny + 1, format='csr'), format='csr')
+G_y_V = kron(eye(Nx + 1, format='csr'), D_y_1d[1:-1, :], format='csr')
 
-# D_y_nodes = diags(
-#     [-0.5/dy * np.ones(Ny), 0.5/dy * np.ones(Ny)],
-#     offsets=[-1,  1],
-#     shape=(Ny, Ny + 2),
-#     format='csr'
-# )
-# S_y = eye(Ny + 2, format='csr')[1:-1, :]   # (Ny) × (Ny+2)
-# S_x = eye(Nx + 2, format='csr')[1:-1, :]   # (Nx) × (Nx+2)
-# G_x_nodes = kron(D_x_nodes, S_y, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
-# G_y_nodes = kron(S_x, D_y_nodes, format='csr')     # (Nx*Ny) × ((Nx+2)*(Ny+2))
+print(G_x_U.toarray())
+print(G_y_V.toarray())
 
 # Staggered gradient and divergence operators
-G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs(Nx, dx)
+G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered = stokes.build_staggered_Grads_Divs_do_nothing(Nx, Ny, dx, dy)
 
 ## Prefactor big Stokes operator
 Z_UV = csr_matrix((N_U, N_V))
@@ -291,13 +242,13 @@ def Phi_exact(x, y):
     return beta_BC * (y + L/2) + 0 * x
 def Npm_exact(x, y):
     return 0 * x + 1.0
-def Np_electrode(phi_1, np_1): #(phi_1, np_0, np_1, np_2):
-    return (np_1) / (1 + phi_1) #return (np_2 - 4*np_1 + 3*np_0) / (2 * phi_1)
-def Nm_electrode(phi_1, nm_1):#(phi_1, nm_0, nm_1, nm_2):
-    return (nm_1) / (1 - phi_1) #-(nm_2 - 4*nm_1 + 3*nm_0) / (2 * phi_1)
+def Np_electrode(phi_1, np_1):
+    return (np_1) / (1 + phi_1) 
+def Nm_electrode(phi_1, nm_1):
+    return (nm_1) / (1 - phi_1)
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('electrode_K.mat')
+ld = loadmat('electrode_open_BCs_advection.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
 Ny_ld = 512
@@ -322,79 +273,6 @@ print('Nm asym:', np.max(np.abs(N_m_ld - np.fliplr(N_m_ld))) / np.max(np.abs(N_m
 Xint_ld = ld['Xint']
 Yint_ld = ld['Yint']
 
-# N_net = (N_p_ld - N_m_ld) / 2
-    
-# radius = 0.25
-# new_cmap = plt.cm.get_cmap('plasma', 256)
-# new_colors = new_cmap(np.linspace(0.2, 0.8, 256))
-# from matplotlib.colors import ListedColormap, Normalize
-# custom_cmap = ListedColormap(new_colors)
-
-# # Create structured grid
-# grid = pv.StructuredGrid(Xint_ld, Yint_ld, np.zeros_like(N_net))
-# grid["N_net"] = N_net.flatten(order='F')
-# grid = grid.clip_box((-2, 2, -2, 2, -1, 1), invert=False)
-
-# # --- Render PyVista with magenta background for chroma-keying ---
-# plotter = pv.Plotter(off_screen=True, window_size=[700, 700])
-# plotter.set_background([1.0, 0.0, 1.0])  # magenta (PyVista uses 0-1 floats)
-# plotter.add_mesh(
-#     grid,
-#     scalars="N_net",
-#     cmap=custom_cmap,
-#     clim=[-0.5, 0.5],
-#     show_edges=False,
-#     show_scalar_bar=False,
-# )
-# disk = pv.Disc(center=(0, 0, 0.001), inner=0, outer=radius, normal=(0, 0, 1), r_res=1, c_res=100)
-# plotter.add_mesh(disk, color="white", show_edges=False)
-# plotter.view_xy()
-# plotter.camera.position = (0, 0, 1)
-# plotter.camera.focal_point = (0, 0, 0)
-# plotter.camera.up = (0, 1, 0)
-
-# # This is the key: set parallel scale to exactly half your domain width
-# plotter.camera.parallel_projection = True
-# plotter.camera.parallel_scale = 2.0
-# pv_image = plotter.screenshot(None, return_img=True)  # shape (H, W, 3), uint8
-# plotter.close()
-
-# # --- Chroma-key magenta background → transparent ---
-# pv_rgba = np.concatenate([pv_image, np.full((*pv_image.shape[:2], 1), 255, dtype=np.uint8)], axis=-1)
-# is_background = (
-#     (pv_image[:, :, 0] >= 245) &
-#     (pv_image[:, :, 1] <= 10) &
-#     (pv_image[:, :, 2] >= 245)
-# )
-# pv_rgba[is_background, 3] = 0  # make background pixels fully transparent
-
-# # --- Composite in matplotlib ---
-# fig, ax = plt.subplots(figsize=(7, 7), dpi=100, facecolor='white')
-# fig.patch.set_facecolor('white')  # figure background
-# ax.patch.set_facecolor('white') 
-# ax.set_facecolor('white')
-
-# ax.imshow(
-#     pv_rgba,
-#     extent=[-2, 2, -2, 2],
-#     origin='upper',
-#     aspect='equal',
-#     zorder=0
-# )
-
-# circle_patch = patches.Circle((0, 0), radius=0.25, color='gray') # 'black' or 'k'
-# ax.add_patch(circle_patch)
-
-# ax.set_xlim(-2, 2)
-# ax.set_ylim(-2, 2)
-# ax.set_aspect('equal')
-# ax.set_xlabel('X axis')
-# ax.set_ylabel('Y axis')
-# ax.grid(True, alpha=0.3)
-# plt.tight_layout()
-# plt.savefig(f'img/n_net_dc/n_net_test.png', dpi=100, bbox_inches='tight', facecolor='white')
-# plt.close()
-
 # Extract the coordinate vectors from the loaded grid
 x_ld = Xint_ld[0, :]  # First row gives x-coordinates
 y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
@@ -403,13 +281,6 @@ y_ld = Yint_ld[:, 0]  # First column gives y-coordinates
 Phi_init = interpn((x_ld, y_ld), Phi_ld, (Xint.T, Yint.T), method='linear', bounds_error=False, fill_value=None)
 N_p_init = interpn((x_ld, y_ld), N_p_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
 N_m_init = interpn((x_ld, y_ld), N_m_ld, (Xint.T, Yint.T), method='nearest', bounds_error=False, fill_value=None)
-# # Q_init = Akima1DInterpolator(theta_ld, Q_ld, method="makima", extrapolate=True)(theta)
-# Q_p_init = Akima1DInterpolator(theta_ld, Q_p_ld, method="makima", extrapolate=True)(theta)
-# Q_m_init = Akima1DInterpolator(theta_ld, Q_m_ld, method="makima", extrapolate=True)(theta)
-
-# Phi_init = Phi_exact(Xint, Yint)
-# N_p_init = Npm_exact(Xint, Yint)
-# N_m_init = Npm_exact(Xint, Yint)
 
 # symmetrize initial seed
 Phi_init = 0.5*(Phi_init + np.fliplr(Phi_init))
@@ -473,15 +344,15 @@ Nm = ctxt[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
 # Nm_prev = np.ones(Ny*Nx)
 
 ## Boundary conditions for Nu = F system
-f_bc_mat = np.zeros((Ny + 1, Nx))
-g_bc_mat = np.zeros((Ny, Nx + 1))
+f_bc_mat = np.zeros((Ny + 1, Nx + 2))
+g_bc_mat = np.zeros((Ny + 2, Nx + 1))
 h_bc = np.zeros((Ny + 1, Nx + 1)).ravel(order='F')
 z_bc = np.zeros(2 * Nib)
 V_bc = np.zeros(3)
 
 ## Initial conditions for Nu = F system
-U_fluid = np.zeros(Nx * Ny)
-V_fluid = np.zeros(Nx * Ny)
+U_fluid = np.zeros((Ny + 1) * (Ny + 2))
+V_fluid = np.zeros((Ny + 2) * (Ny + 1))
 
 ###############################
 #######  SETUP METHODS  #######
@@ -515,7 +386,7 @@ def G_d_G_m(Phi, N_m, electrode):
     return cpeo.Grad_dot_Grad_neumann_far_field(Phi, N_m, dx, dy, Nx, Ny, beta_BC, electrode)
 
 def b_Op_Schur(ctxt, bcs, U_fluid, V_fluid, electrode_p, electrode_m): 
-    return cpeo.Build_RHS_Schur_System_neumann(ctxt, electrode_p, electrode_m, bcs, U_fluid, V_fluid, dLap_phi, dLap_npm, Lap_phi, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, beta_BC)
+    return cpeo.Build_RHS_Schur_System_neumann(ctxt, electrode_p, electrode_m, bcs, U_fluid, V_fluid, Lap_phi, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, beta_BC)
 
 def b_Op(ctxt, bcs, U_fluid, V_fluid, electrode_p, electrode_m):
     return cpeo.Build_RHS_rho_neumann(ctxt, electrode_p, electrode_m, bcs, U_fluid, V_fluid, dLap_phi, dLap_npm, Lap_phi, G_d_G_p, G_d_G_m, delta_layer, Nx, Ny, Nib, Jop, Jop_prime, dx, beta_BC)
@@ -538,7 +409,6 @@ u_n = ctxt.copy()
 p_guess = u_n[3*Nx*Ny:]
 
 # Build dense Schur matrix
-# schurOp = cpeo.SchurLinearOperator_R(dLap, Nib*3, Nib, Nx, Ny, delta_layer, Sop_prime, Jop_prime)
 schurRHS = b_Op_Schur(ctxt, ctxt_BCs_Schur, U_fluid, V_fluid, electrode_p, electrode_m)
 computedRHS = cpeo.schur_rhs_R_neumann(dLap_phi, dLap_npm, schurRHS, Nx, Ny, Nib, delta_layer, Jop_prime)
 schurDense = np.zeros((Nib * 3, Nib * 3))
@@ -590,25 +460,47 @@ electrode_m = Nm_electrode(Phi[0,:], Nm[0,:])
 Np_full[0, 1:-1] = electrode_p
 Nm_full[0, 1:-1] = electrode_m
 
-Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
-Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
+# interpolate onto U grid (average in y) and find grad_x phi
+phi_interpolated_U = 0.5 * (Phi_full[:-1, :] + Phi_full[1:, :])   # shape (Ny+1, Nx+2)
+Grad_x_Phi_U_int = (G_x_U @ phi_interpolated_U.ravel(order='F')).reshape(Ny + 1, Nx, order='F')
+Grad_x_Phi_U = np.zeros_like(phi_interpolated_U)
+Grad_x_Phi_U[:, 1:-1] = Grad_x_Phi_U_int
 
-Np_relevant_y = Np_full[1:-1,:]
-Nm_relevant_y = Nm_full[1:-1,:]
-Np_relevant_x = Np_full[:,1:-1]
-Nm_relevant_x = Nm_full[:,1:-1]
+# interpolate onto V grid (average in x) and find grad_y phi
+phi_interpolated_V = 0.5 * (Phi_full[:, :-1] + Phi_full[:, 1:])   # shape (Ny+2, Nx+1)
+Grad_y_Phi_V_int = (G_y_V @ phi_interpolated_V.ravel(order='F')).reshape(Ny, Nx + 1, order='F')
+Grad_y_Phi_V = np.zeros_like(phi_interpolated_V)
+Grad_y_Phi_V[1:-1, :] = Grad_y_Phi_V_int
+Grad_y_Phi_V[0, :] = phi_interpolated_V[1, :] / dx
+Grad_y_Phi_V[-1, :] = beta_BC
 
-bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+Np_interpolated_U = 0.5 * (Np_full[:-1, :] + Np_full[1:, :])
+Nm_interpolated_U = 0.5 * (Nm_full[:-1, :] + Nm_full[1:, :])
+Np_interpolated_V = 0.5 * (Np_full[:, :-1] + Np_full[:, 1:])
+Nm_interpolated_V = 0.5 * (Nm_full[:, :-1] + Nm_full[:, 1:])
 
-body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
-body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
-body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
-body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
+bodyForces_x = -(Np_interpolated_U.ravel(order='F') - Nm_interpolated_U.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_U.ravel(order='F')
+bodyForces_y = -(Np_interpolated_V.ravel(order='F') - Nm_interpolated_V.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_V.ravel(order='F')
+
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(UGridX, UGridY, bodyForces_x.reshape(Ny + 1, Nx + 2, order='F'), cmap=cmap, edgecolor='none')
+ax.set_title("x body forces")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(VGridX, VGridY, bodyForces_y.reshape(Ny + 2, Nx + 1, order='F'), cmap=cmap, edgecolor='none')
+ax.set_title("y body forces")
+ax.set_xlabel("x"); ax.set_ylabel("y")
+
+plt.show()
 
 ## Initialize variables for Nu = F solve
-f = body_interpolated_x.ravel(order='F')
-g = body_interpolated_y.ravel(order='F')
+f = bodyForces_x.ravel(order='F')
+g = bodyForces_y.ravel(order='F')
 
 f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
 g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
@@ -624,37 +516,13 @@ for col in range(Nib * 2 + 3):
 
 U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid = np.linalg.svd(schurDense_N)
 
-U, V, P, lam_X, lam_Y, V_rigid = stokes.solve_factorized_K(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_bc, V_bc, xib, yib, Nib, Nx, tol, cut)
-#U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
+U, V, P, lam_X, lam_Y, V_rigid = stokes.solve_factorized_K(UGridX, UGridY, VGridX, VGridY, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_bc, V_bc, xib, yib, Nib, Nx, Ny, dx, tol, cut)
 
-Uplot = U.reshape((Ny + 1, Nx), order='F')
-Vplot = V.reshape((Ny, Nx + 1), order='F')
-Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
+U_fluid = U.reshape((Ny + 1, Nx + 2), order='F')
+V_fluid = V.reshape((Ny + 2, Nx + 1), order='F')
+V_fluid[0, :] = 0
 
-U_interpolated = np.zeros([Ny, Nx])
-V_interpolated = np.zeros([Ny, Nx])
-for col_index in range(Uplot.shape[1]):
-    col = Uplot[:, col_index]
-    for row_index in range(len(col) - 1):
-        midpoint = (col[row_index] + col[row_index+1]) / 2
-        U_interpolated[row_index, col_index] = midpoint
-
-
-for row_index in range(Vplot.shape[0]):
-    row = Vplot[row_index, :]
-    for col_index in range(len(row) - 1):
-        midpoint = (row[col_index] + row[col_index+1]) / 2
-        V_interpolated[row_index, col_index] = midpoint
-
-UFull = np.zeros((Ny + 2, Nx + 2))
-UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
-
-VFull = np.zeros((Ny + 2, Nx + 2))
-VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
-
-# Get initial fluid velocity values
-U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
-V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+# Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
 
 # ## Begin profiling here
 # pr = cProfile.Profile()
@@ -815,34 +683,40 @@ for t_step in range(N_t):
         Nm_full[0, 0] = Nm_full[0, 1]
         Nm_full[0, -1] = Nm_full[0, -2]
 
-        Grad_x_Phi_Flat = (G_x_full @ Phi_full.ravel(order='F'))
-        Grad_y_Phi_Flat = (G_y_full @ Phi_full.ravel(order='F'))
+        # interpolate onto U grid (average in y) and find grad_x phi
+        phi_interpolated_U = 0.5 * (Phi_full[:-1, :] + Phi_full[1:, :])   # shape (Ny+1, Nx+2)
+        Grad_x_Phi_U_int = (G_x_U @ phi_interpolated_U.ravel(order='F')).reshape(Ny + 1, Nx, order='F')
+        Grad_x_Phi_U = np.zeros_like(phi_interpolated_U)
+        Grad_x_Phi_U[:, 1:-1] = Grad_x_Phi_U_int
 
-        Np_relevant_y = Np_full[1:-1,:]
-        Nm_relevant_y = Nm_full[1:-1,:]
-        Np_relevant_x = Np_full[:,1:-1]
-        Nm_relevant_x = Nm_full[:,1:-1]
+        # interpolate onto V grid (average in x) and find grad_y phi
+        phi_interpolated_V = 0.5 * (Phi_full[:, :-1] + Phi_full[:, 1:])   # shape (Ny+2, Nx+1)
+        Grad_y_Phi_V_int = (G_y_V @ phi_interpolated_V.ravel(order='F')).reshape(Ny, Nx + 1, order='F')
+        Grad_y_Phi_V = np.zeros_like(phi_interpolated_V)
+        Grad_y_Phi_V[1:-1, :] = Grad_y_Phi_V_int
+        Grad_y_Phi_V[0, :] = phi_interpolated_V[1, :] / dx
+        Grad_y_Phi_V[-1, :] = beta_BC
 
-        bodyForces_x = -(Np_relevant_x.ravel(order='F') - Nm_relevant_x.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_Flat
-        bodyForces_y = -(Np_relevant_y.ravel(order='F') - Nm_relevant_y.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_Flat
+        Np_interpolated_U = 0.5 * (Np_full[:, :-1] + Np_full[:, 1:])
+        Nm_interpolated_U = 0.5 * (Nm_full[:, :-1] + Nm_full[:, 1:])
+        Np_interpolated_V = 0.5 * (Np_full[:-1, :] + Np_full[1:, :])
+        Nm_interpolated_V = 0.5 * (Nm_full[:-1, :] + Nm_full[1:, :])
 
-        body_x = bodyForces_x.reshape(Ny + 2, Nx, order='F')
-        body_y = bodyForces_y.reshape(Ny, Nx + 2, order='F')
-        body_interpolated_x = 0.5 * (body_x[:-1, :] + body_x[1:, :])
-        body_interpolated_y = 0.5 * (body_y[:, :-1] + body_y[:, 1:])
+        bodyForces_x = -(Np_interpolated_U.ravel(order='F') - Nm_interpolated_U.ravel(order='F')) / (2 * delta_layer**2) * Grad_x_Phi_U.ravel(order='F')
+        bodyForces_y = -(Np_interpolated_V.ravel(order='F') - Nm_interpolated_V.ravel(order='F')) / (2 * delta_layer**2) * Grad_y_Phi_V.ravel(order='F')
 
         ################################
         #####  solve N*u = F(phi)  #####
         ################################
 
         # RHS
-        f = body_interpolated_x.ravel(order='F')
-        g = body_interpolated_y.ravel(order='F')
+        f = bodyForces_x.ravel(order='F')
+        g = bodyForces_y.ravel(order='F')
 
         f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
         g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-        U, V, P, lam_X, lam_Y, V_rigid = stokes.solve_factorized_K(-L/2, L/2, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_bc, V_bc, xib, yib, Nib, Nx, tol, cut)
+        U, V, P, lam_X, lam_Y, V_rigid = stokes.solve_factorized_K(UGridX, UGridY, VGridX, VGridY, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_bc, V_bc, xib, yib, Nib, Nx, Ny, dx, tol, cut)
         #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
         Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_bc, V_bc])
@@ -853,32 +727,9 @@ for t_step in range(N_t):
         residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
         print(f'Current residual Nu = {residual_check_N}')
 
-        Uplot = U.reshape((Ny + 1, Nx), order='F')
-        Vplot = V.reshape((Ny, Nx + 1), order='F')
-        Pplot = P.reshape((Ny + 1, Nx + 1), order='F')
-
-        U_interpolated = np.zeros([Ny, Nx])
-        V_interpolated = np.zeros([Ny, Nx])
-        for col_index in range(Uplot.shape[1]):
-            col = Uplot[:, col_index]
-            for row_index in range(len(col) - 1):
-                midpoint = (col[row_index] + col[row_index+1]) / 2
-                U_interpolated[row_index, col_index] = midpoint
-
-        for row_index in range(Vplot.shape[0]):
-            row = Vplot[row_index, :]
-            for col_index in range(len(row) - 1):
-                midpoint = (row[col_index] + row[col_index+1]) / 2
-                V_interpolated[row_index, col_index] = midpoint
-
-        UFull = np.zeros((Ny + 2, Nx + 2))
-        UFull[1:Ny + 1, 1:Nx + 1] = U_interpolated
-
-        VFull = np.zeros((Ny + 2, Nx + 2))
-        VFull[1:Ny + 1, 1:Nx + 1] = V_interpolated
-
-        U_fluid = (UFull[1:Ny+1,1:Nx+1]).ravel(order='F')
-        V_fluid = (VFull[1:Ny+1,1:Nx+1]).ravel(order='F')
+        U_fluid = U.reshape((Ny + 1, Nx + 2), order='F')
+        V_fluid = V.reshape((Ny + 2, Nx + 1), order='F')
+        V_fluid[0, :] = 0
 
         residual_check_RHS = b_Op(u_next, ctxt_BCs, U_fluid, V_fluid, electrode_p, electrode_m)
         residual_check_AxOp = AxOp(u_next)
@@ -898,7 +749,7 @@ for t_step in range(N_t):
     # ------------------------------------------------------
     custom_cmap = ListedColormap(plt.cm.get_cmap('cmr.viola', 256)(np.linspace(0.2, 0.8, 256)))
 
-    def plot_field(field, scalars_name, clim, save_path, Xint, Yint, X, Y, UFull, VFull, radius=1):
+    def plot_field(field, scalars_name, clim, save_path, Xint, Yint, Uint, Vint, radius=1):
         """
         Render a 2D scalar field with PyVista (chroma-keyed) and overlay
         matplotlib streamlines, then save to disk.
@@ -948,9 +799,9 @@ for t_step in range(N_t):
         )
 
         # Mask streamlines inside the disk
-        U_masked = np.where(X**2 + (Y + particle_y_offset)**2 <= radius**2, np.nan, UFull) # Y + 2
-        V_masked = np.where(X**2 + (Y + particle_y_offset)**2 <= radius**2, np.nan, VFull) # Y + 2
-        ax.streamplot(X, Y, U_masked, V_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
+        U_masked = np.where(Xint**2 + (Yint + particle_y_offset)**2 <= radius**2, np.nan, Uint) # Y + 2
+        V_masked = np.where(Xint**2 + (Yint + particle_y_offset)**2 <= radius**2, np.nan, Vint) # Y + 2
+        ax.streamplot(Xint, Yint, U_masked, V_masked, color='black', density=2, linewidth=1, arrowsize=1.5, zorder=1)
 
         # Colorbar
         sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=Normalize(vmin=clim[0], vmax=clim[1]))
@@ -974,76 +825,21 @@ for t_step in range(N_t):
     N_net = (Np - Nm) / 2
 
     fields = [
-        (N_net, 'N_net', [-0.5, 0.5], f'img/electrode/n_net/electrode_K.png'),
-        (Np,    'N_p',   [0,  2], f'img/electrode/n_p/electrode_K.png'),
-        (Nm,    'N_m',   [0,  2], f'img/electrode/n_m/electrode_K.png'),
+        (N_net, 'N_net', [-0.5, 0.5], f'img/electrode/n_net/electrode_open_BCs_advection.png'),
+        (Np,    'N_p',   [0,  2], f'img/electrode/n_p/electrode_open_BCs_advection.png'),
+        (Nm,    'N_m',   [0,  2], f'img/electrode/n_m/electrode_open_BCs_advection.png'),
     ]
 
+    Uint = 0.5 * (U_fluid[:-1, 1:-1] + U_fluid[1:, 1:-1])
+    Vint = 0.5 * (V_fluid[1:-1, :-1] + V_fluid[1:-1, 1:])
+
     for field, name, clim, path in fields:
-        plot_field(field, name, clim, path, Xint, Yint, X, Y, UFull, VFull)
-
-cmap = plt.cm.spring
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(X, Y, (Np_full - Nm_full) / 2, cmap=cmap, edgecolor='none')
-ax.set_title("full ")
-ax.set_xlabel("x"); ax.set_ylabel("y")
-
-val = Np[:, 0] - Nm[:, 0]
-
-print(np.max(np.abs(Np_full[:, 0] - Nm_full[:, 0])))
-print(np.max(np.abs(Np_relevant_x[:, 0] - Nm_relevant_x[:, 0])))
-
-# For body_interpolated_x: shape (Ny+1, Nx), lives at y-midpoints, x-interior
-x_mid_inner = x[1:-1]                  # length Nx
-y_mid = 0.5 * (y[:-1] + y[1:])        # length Ny+1
-Xplot_bx, Yplot_bx = np.meshgrid(x_mid_inner, y_mid)
-
-# For body_interpolated_y: shape (Ny, Nx+1), lives at y-interior, x-midpoints
-x_mid = 0.5 * (x[:-1] + x[1:])        # length Nx+1
-y_mid_inner = y[1:-1]                  # length Ny
-Xplot_by, Yplot_by = np.meshgrid(x_mid, y_mid_inner)
-
-cmap = plt.cm.spring
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(Xplot_bx, Yplot_bx, body_interpolated_x, cmap=cmap, edgecolor='none')
-ax.set_title("x body forces")
-ax.set_xlabel("x"); ax.set_ylabel("y")
-
-cmap = plt.cm.spring
-fig = plt.figure()
-ax = fig.add_subplot(111, projection="3d")
-ax.plot_surface(Xplot_by, Yplot_by, body_interpolated_y, cmap=cmap, edgecolor='none')
-ax.set_title("y body forces")
-ax.set_xlabel("x"); ax.set_ylabel("y")
-
-plt.show()
-
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
-# ax.set_title("V")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
-
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
-# ax.set_title("|velocity|")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
-
-plt.show()
+        plot_field(field, name, clim, path, Xint, Yint, Uint, Vint)
 
 residual_check_RHS = b_Op(u_next, ctxt_BCs, U_fluid, V_fluid, electrode_p, electrode_m)
 residual_check_AxOp = AxOp(u_next)
 residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.linalg.norm(residual_check_RHS)
 print(f'New residual Rphi = {residual_check}')
-
-# check boundaries
-# electrode = (Np[-3,:] - 4 * Np[-2,:] + 3 * Np[-1,:]) / (2 * dx) - (Phi[-2,:] / dx) * Np[-1,:]
-
-# check = (Np[1,:] * dx) / (Phi[1,:] + dx)
-# residual = check - Np[0,:]
 
 # check Nu residual 
 Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_bc, V_bc])
@@ -1069,7 +865,7 @@ print(f'Full residual = {residual_check_full}')
 ###################################
 
 # Save results
-savemat('electrode_K.mat', {
+savemat('electrode_open_BCs_advection.mat', {
     'ctxt_Rphi': ctxt,
     'u_next': u_next,
     'Xint': Xint,
@@ -1081,34 +877,17 @@ savemat('electrode_K.mat', {
     'Nm': Nm,
     'V_rigid': V_rigid,
     'err': np.array(err),
-    'body_x': body_interpolated_x,
-    'body_y': body_interpolated_y,
-    'U_fluid': UFull,
-    'V_fluid': VFull,
-    'P_fluid': Pplot,
+    # 'body_x': body_interpolated_x,
+    # 'body_y': body_interpolated_y,
+    'U_fluid': U_fluid,
+    'V_fluid': V_fluid,
+    'P_fluid': P,
     'lam_X': lam_X,
     'lam_Y': lam_Y
 })
 
-print('U asym:', np.max(np.abs(U_fluid.reshape(Ny,Nx,order='F') + np.fliplr(U_fluid.reshape(Ny,Nx,order='F')))))  # U should be ANTIsymmetric
-print('V asym:', np.max(np.abs(V_fluid.reshape(Ny,Nx,order='F') - np.fliplr(V_fluid.reshape(Ny,Nx,order='F')))))  # V should be symmetric
-
-# # Define circular mask (radius 0.25 centered at origin)
-# radius = 0.25
-# mask = (X**2 + Y**2) <= radius**2
-
-# # Apply mask to UFull and VFull
-# UFull[mask] = np.nan
-# VFull[mask] = np.nan
-
-# plt.figure(figsize=(8, 6))
-# plt.streamplot(X, Y, UFull, VFull, color='red', density=5, linewidth=1, arrowsize=1.5)
-# plt.xlabel('X-coordinate')
-# plt.ylabel('Y-coordinate')
-# plt.title('Flow Field Streamline Plot')
-# plt.xlim(-2, 2)
-# plt.ylim(-2, 2)
-# plt.grid(True)
+# print('U asym:', np.max(np.abs(U_fluid.reshape(Ny,Nx,order='F') + np.fliplr(U_fluid.reshape(Ny,Nx,order='F')))))  # U should be ANTIsymmetric
+# print('V asym:', np.max(np.abs(V_fluid.reshape(Ny,Nx,order='F') - np.fliplr(V_fluid.reshape(Ny,Nx,order='F')))))  # V should be symmetric
 
 cmap = plt.cm.spring
 fig = plt.figure()
@@ -1138,16 +917,18 @@ ax.plot_surface(Xint, Yint, N_net, cmap=cmap, edgecolor='none')
 ax.set_title("N_net")
 ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, VFull, cmap=cmap, edgecolor='none')
-# ax.set_title("V")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(UGridX, UGridY, U_fluid, cmap=cmap, edgecolor='none')
+ax.set_title("U_fluid")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection="3d")
-# ax.plot_surface(X, Y, np.sqrt(UFull**2 + VFull**2), cmap=cmap, edgecolor='none')
-# ax.set_title("|velocity|")
-# ax.set_xlabel("x"); ax.set_ylabel("y")
+cmap = plt.cm.spring
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+ax.plot_surface(VGridX, VGridY, V_fluid, cmap=cmap, edgecolor='none')
+ax.set_title("V_fluid")
+ax.set_xlabel("x"); ax.set_ylabel("y")
 
 plt.show()
