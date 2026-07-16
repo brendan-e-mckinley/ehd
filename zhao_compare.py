@@ -13,7 +13,7 @@ from scipy.sparse.linalg import splu, eigs, spsolve, gmres, LinearOperator
 from scipy.linalg import qr, lstsq
 from scipy.io import loadmat, savemat
 from scipy.interpolate import Akima1DInterpolator, interpn
-import CPEO_utils_open_BCs as cpeo
+import CPEO_utils_zhao_compare as cpeo
 import stokes_solver_utils_open_BCs as stokes
 from matplotlib.colors import ListedColormap, Normalize
 
@@ -22,7 +22,7 @@ from matplotlib.colors import ListedColormap, Normalize
 ###########################
 
 ## Grid parameters
-Nx = 512 #512; % number of grid points along one direction
+Nx = 512 # 256; % number of grid points along one direction
 L = 4.0 * np.pi 
 x = np.linspace(-L/2, L/2, Nx+2) 
 dx = x[1] - x[0]
@@ -31,7 +31,7 @@ dy = y[1] - y[0]
 
 ## Miscellaneous parameters
 tol = 1e-4
-beta_BC = 50 / L
+beta_BC = 10 / L
 sigma_bc = 0.1  # 0.68
 delta_layer = 40 * dx #0.1#; %6*dx;
 cut = 6 * 1.2 * dx # cutoff value
@@ -248,14 +248,15 @@ def Nm_electrode(phi_1, nm_1):
     return (nm_1) / (1 - phi_1)
 
 ## Initial conditions for Rphi = rho system
-ld = loadmat('electrode_open_BCs_advection_no_K.mat')
+ld = loadmat('zhao_compare.mat')
 METHOD = 'cubic'  # equivalent to 'makima' in MATLAB
 
-Ny_ld = 128
-Nx_ld = 128
+Ny_ld = 256
+Nx_ld = 256
 Nib_ld = int(len(ld['xib']))
 sz = Ny_ld * Nx_ld
 
+V_rigid_ld = ld['V_rigid']
 ctxt_ld = ld['ctxt_Rphi'].ravel(order='F')
 Phi_ld = ctxt_ld[:sz].reshape(Ny_ld, Nx_ld, order='F')
 N_p_ld = ctxt_ld[sz:2*sz].reshape(Ny_ld, Nx_ld, order='F')
@@ -310,7 +311,7 @@ ctxt_BCs_Schur = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Np_BCs.ravel(order='F'),
     Nm_BCs.ravel(order='F'),
-    np.zeros(len(xib)) - (sigma_bc),
+    rad * np.sin(theta), #np.zeros(len(xib)) - (sigma_bc),
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -320,7 +321,7 @@ ctxt_BCs = np.concatenate([
     Phi_BCs.ravel(order='F'),
     Np_BCs.ravel(order='F'),
     Nm_BCs.ravel(order='F'),
-    np.zeros(len(xib)) - (sigma_bc/delta_layer),
+    (rad * np.sin(theta)) / delta_layer, #np.zeros(len(xib)) - (sigma_bc/delta_layer),
     np.zeros(len(xib)),
     np.zeros(len(xib))
 ])
@@ -346,8 +347,8 @@ Nm = ctxt[2*Ny*Nx:3*Nx*Ny].reshape((Ny, Nx), order='F')
 f_bc_mat = np.zeros((Ny + 1, Nx + 2))
 g_bc_mat = np.zeros((Ny + 2, Nx + 1))
 h_bc = np.zeros((Ny + 1, Nx + 1)).ravel(order='F')
-z_x = np.zeros(Nib)
-z_y = np.zeros(Nib)
+z_bc = np.zeros(2 * Nib)
+V_bc = np.zeros(3)
 
 ## Initial conditions for Nu = F system
 U_fluid = np.zeros((Ny + 1) * (Ny + 2))
@@ -505,17 +506,17 @@ f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
 g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
 # Build dense Schur matrix for hydrodynamic system
-schurDense_N = np.zeros((Nib * 2, Nib * 2))
-for col in range(Nib * 2): 
-    eye_mat_N = np.zeros(Nib * 2)
+schurDense_N = np.zeros((Nib * 2 + 3, Nib * 2 + 3))
+for col in range(Nib * 2 + 3): 
+    eye_mat_N = np.zeros(Nib * 2 + 3)
     eye_mat_N[col] = 1
-    lam_X = eye_mat_N[0:Nib]
-    lam_Y = eye_mat_N[Nib:]
-    schurDense_N[:,col] = stokes.apply_Schur_new(lam_X, lam_Y, stokes_LU, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, cut)
+    lam = eye_mat_N[0:2*Nib]
+    V_rigid = eye_mat_N[2*Nib:]
+    schurDense_N[:,col] = stokes.LHS_op_big_K(lam, V_rigid, stokes_LU, UGridX, UGridY, VGridX, VGridY, xib, yib, particle_x_offset, particle_y_offset, delta_x, delta_y, N_U, N_V, N_P, Nib, cut)
 
 U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid = np.linalg.svd(schurDense_N)
 
-U, V, P, lam_X, lam_Y = stokes.solve_factorized(UGridX, UGridY, VGridX, VGridY, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, xib, yib, Nib, Nx, Ny, dx, tol, cut)
+U, V, P, lam_X, lam_Y, V_rigid = stokes.solve_factorized_K(UGridX, UGridY, VGridX, VGridY, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_bc, V_bc, xib, yib, Nib, Nx, Ny, dx, tol, cut)
 
 U_fluid = U.reshape((Ny + 1, Nx + 2), order='F')
 V_fluid = V.reshape((Ny + 2, Nx + 1), order='F')
@@ -715,12 +716,14 @@ for t_step in range(N_t):
         f_bc = f.ravel(order='F') + f_bc_mat.ravel(order='F')
         g_bc = g.ravel(order='F') + g_bc_mat.ravel(order='F')
 
-        U, V, P, lam_X, lam_Y = stokes.solve_factorized(UGridX, UGridY, VGridX, VGridY, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_x, z_y, xib, yib, Nib, Nx, Ny, dx, tol, cut)
+        U, V, P, lam_X, lam_Y, V_rigid = stokes.solve_factorized_K(UGridX, UGridY, VGridX, VGridY, stokes_LU, U_schur_fluid, Sigma_schur_fluid, Vh_schur_fluid, f_bc, g_bc, h_bc, z_bc, V_bc, xib, yib, Nib, Nx, Ny, dx, tol, cut)
         #U, V, P, lam_X, lam_Y = stokes.solve(-L/2, L/2, f_bc, g_bc, h_bc, z_x, z_y, rad, Nx, tol, cut)
 
-        Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-        u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
-        Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, cut)
+        Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_bc, V_bc])
+        lam = stokes.interleave(lam_X, lam_Y)
+        u_tilde = np.concatenate([U, V, P, lam, V_rigid])
+        K = stokes.build_K(xib, yib, [particle_x_offset, particle_y_offset], Nib)
+        Nu = stokes.apply_A_K(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, K, cut)
         residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
         print(f'Current residual Nu = {residual_check_N}')
 
@@ -822,9 +825,9 @@ for t_step in range(N_t):
     N_net = (Np - Nm) / 2
 
     fields = [
-        (N_net, 'N_net', [-0.5, 0.5], f'img/electrode/n_net/electrode_open_BCs_advection_no_K.png'),
-        (Np,    'N_p',   [0,  2], f'img/electrode/n_p/electrode_open_BCs_advection_no_K.png'),
-        (Nm,    'N_m',   [0,  2], f'img/electrode/n_m/electrode_open_BCs_advection_no_K.png'),
+        (N_net, 'N_net', [-0.5, 0.5], f'img/electrode/n_net/zhao_compare.png'),
+        (Np,    'N_p',   [0,  2], f'img/electrode/n_p/zhao_compare.png'),
+        (Nm,    'N_m',   [0,  2], f'img/electrode/n_m/zhao_compare.png'),
     ]
 
     Uint = 0.5 * (U_fluid[:-1, 1:-1] + U_fluid[1:, 1:-1])
@@ -839,9 +842,11 @@ residual_check = np.linalg.norm(residual_check_AxOp - residual_check_RHS) / np.l
 print(f'New residual Rphi = {residual_check}')
 
 # check Nu residual 
-Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_x, z_y])
-u_tilde = np.concatenate([U, V, P, lam_X, lam_Y])
-Nu = stokes.apply_A(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, cut)
+Nu_RHS = np.concatenate([f_bc, g_bc, h_bc, z_bc, V_bc])
+lam = stokes.interleave(lam_X, lam_Y)
+u_tilde = np.concatenate([U, V, P, lam, V_rigid])
+K = stokes.build_K(xib, yib, [particle_x_offset, particle_y_offset], Nib)
+Nu = stokes.apply_A_K(u_tilde, UGridX, UGridY, VGridX, VGridY, xib, yib, delta_x, delta_y, N_U, N_V, N_P, Nib, Lap_U, Lap_V, G_x_staggered, G_y_staggered, D_x_staggered, D_y_staggered, K, cut)
 residual_check_N = np.linalg.norm(Nu - Nu_RHS) / np.linalg.norm(Nu_RHS)
 print(f'New residual Nu = {residual_check_N}')
 
@@ -860,7 +865,7 @@ print(f'Full residual = {residual_check_full}')
 ###################################
 
 # Save results
-savemat('electrode_open_BCs_advection_no_K.mat', {
+savemat('zhao_compare.mat', {
     'ctxt_Rphi': ctxt,
     'u_next': u_next,
     'Xint': Xint,
@@ -870,6 +875,7 @@ savemat('electrode_open_BCs_advection_no_K.mat', {
     'Phi': Phi,
     'Np': Np,
     'Nm': Nm,
+    'V_rigid': V_rigid,
     'err': np.array(err),
     # 'body_x': body_interpolated_x,
     # 'body_y': body_interpolated_y,
